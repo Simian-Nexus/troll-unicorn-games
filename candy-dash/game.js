@@ -326,7 +326,7 @@
         { kind: "drone", x: 500, patrol: [450, 610] },
         { kind: "spitter", x: 820 },
         { kind: "grunt", x: 1100, patrol: [1030, 1230] },
-        { kind: "brute", x: 1550, patrol: [1460, 1650] },
+        { kind: "brute", x: 1550, patrol: [1380, 1760] },
         { kind: "spitter", x: 1950 },
         { kind: "grunt", x: 2250, patrol: [2180, 2380] },
         { kind: "drone", x: 2600, patrol: [2540, 2720] },
@@ -405,10 +405,11 @@
 
   function makeEnemy(kind, x, patrolRange) {
     let e;
-    if (kind === "grunt") e = { kind, x, y: GROUND_Y - 58, w: 34, h: 58, vx: 60 };
+    // hp = horn-bolt hits to purify. Tougher-looking creatures soak more.
+    if (kind === "grunt") e = { kind, x, y: GROUND_Y - 58, w: 34, h: 58, vx: 60, hp: 2 };
     else if (kind === "spitter")
-      e = { kind, x, y: GROUND_Y - 62, w: 36, h: 62, vx: 0, spitTimer: 1.2 + Math.random() * 1.3 };
-    else if (kind === "brute") e = { kind, x, y: GROUND_Y - 78, w: 50, h: 78, vx: 45 };
+      e = { kind, x, y: GROUND_Y - 62, w: 36, h: 62, vx: 0, hp: 2, spitTimer: 1.2 + Math.random() * 1.3 };
+    else if (kind === "brute") e = { kind, x, y: GROUND_Y - 78, w: 50, h: 78, vx: 65, hp: 3 };
     else if (kind === "boss")
       e = {
         kind: "brute",
@@ -418,10 +419,11 @@
         h: 78 * BOSS_SCALE,
         vx: 55,
         hp: BOSS_HP,
-        hpMax: BOSS_HP,
         isBoss: true,
       };
-    else e = { kind: "drone", x, y: GROUND_Y - 46, w: 40, h: 46, vx: 70 };
+    else e = { kind: "drone", x, y: GROUND_Y - 46, w: 40, h: 46, vx: 70, hp: 1 };
+    e.hpMax = e.hp;
+    e.hitFlash = 0;
     if (patrolRange) {
       e.patrolMin = patrolRange[0];
       e.patrolMax = patrolRange[1];
@@ -622,7 +624,11 @@
     let landed = false;
     if (wasFalling) {
       for (const p of platforms) {
-        const withinX = player.x + player.w - 12 > p.x && player.x + 12 < p.x + p.w;
+        // Land only when Troll's centre is over the platform — the old 12px
+        // overlap let him stand with most of his body past the edge, which
+        // read as floating in mid-air next to the branch.
+        const cx = player.x + player.w / 2;
+        const withinX = cx > p.x - 6 && cx < p.x + p.w + 6;
         if (withinX && prevFootY <= p.y + 1 && footY >= p.y) {
           player.y = p.y - player.h;
           landed = true;
@@ -650,16 +656,22 @@
 
   function updateEnemies(dt) {
     for (const o of obstacles) {
+      if (o.hitFlash > 0) o.hitFlash = Math.max(0, o.hitFlash - dt);
       if (o.purifying) continue;
       if (o.isBoss && o.patrolMin !== undefined) {
-        // The boss actively hunts Troll within his arena rather than just
-        // pacing back and forth.
+        // The boss hunts Troll. He sleeps until Troll approaches his arena,
+        // then chases anywhere in the level — clamping him to the arena made
+        // him park at its edge and just sit there whenever Troll fought from
+        // outside it.
         const targetX = player.x + player.w / 2 - o.w / 2;
         const diff = targetX - o.x;
-        const dir = Math.sign(diff);
-        o.x += dir * Math.min(Math.abs(diff), BOSS_CHASE_SPEED * dt);
-        o.vx = dir * BOSS_CHASE_SPEED; // drawEnemy mirrors the sprite based on vx sign
-        o.x = Math.max(o.patrolMin, Math.min(o.patrolMax - o.w, o.x));
+        if (!o.aggro && (Math.abs(diff) < 500 || player.x > o.patrolMin - 250)) o.aggro = true;
+        if (o.aggro) {
+          const dir = Math.sign(diff);
+          o.x += dir * Math.min(Math.abs(diff), BOSS_CHASE_SPEED * dt);
+          o.vx = dir * BOSS_CHASE_SPEED; // drawEnemy mirrors the sprite based on vx sign
+          o.x = Math.max(60, Math.min(levelWidth - o.w - 60, o.x));
+        }
       } else if (o.patrolMin !== undefined) {
         o.x += o.vx * dt;
         if (o.x < o.patrolMin) {
@@ -752,12 +764,13 @@
       for (const o of obstacles) {
         if (o.purifying) continue;
         if (b.x + b.r > o.x && b.x - b.r < o.x + o.w && b.y + b.r > o.y && b.y - b.r < o.y + o.h) {
-          if (o.hp !== undefined) {
-            o.hp -= 1;
-            beep(700, 0.1, "triangle", 0.05);
-            if (o.hp <= 0) purifyBoss(o);
+          o.hp -= 1;
+          if (o.hp <= 0) {
+            if (o.isBoss) purifyBoss(o);
+            else purify(o);
           } else {
-            purify(o);
+            o.hitFlash = 0.18;
+            beep(700, 0.1, "triangle", 0.05);
           }
           b.hit = true;
           break;
@@ -1066,6 +1079,9 @@
       const drawY = o.y + o.h - drawH + bob;
       ctx.save();
       if (o.purifying) ctx.globalAlpha = Math.max(0, o.purifyTimer / o.purifyDuration);
+      // Brief white-hot flash on a non-lethal bolt hit so multi-hp enemies
+      // visibly register damage.
+      if (o.hitFlash > 0) ctx.filter = "brightness(2.1)";
       // No arm/mouth animation frames exist for the boss (single static
       // painting) — a procedural breathing pulse + periodic "roar" lunge is
       // the honest approximation without new art. Real limb animation would
@@ -1096,6 +1112,13 @@
         ctx.fillRect(o.x, o.y - 16, o.w, 8);
         ctx.fillStyle = "#dcc48f";
         ctx.fillRect(o.x, o.y - 16, o.w * pct, 8);
+      } else if (!o.purifying && o.hpMax > 1 && o.hp < o.hpMax) {
+        // Small health bar once a multi-hit enemy has taken damage.
+        const pct = Math.max(0, o.hp / o.hpMax);
+        ctx.fillStyle = "rgba(20,20,30,0.55)";
+        ctx.fillRect(o.x, o.y - 12, o.w, 5);
+        ctx.fillStyle = "#dcc48f";
+        ctx.fillRect(o.x, o.y - 12, o.w * pct, 5);
       }
       return;
     }
@@ -1414,7 +1437,10 @@
     });
   }
 
-  const IDLE_FIDGET_DELAY = 0.35; // brief pause before the fidget loop kicks in, to avoid flicker
+  // Until this much idle time passes, Troll just stands facing whichever way
+  // he was last running (and bolts fire that way too); only after a long wait
+  // does the front-facing fidget loop take over. Jonathan asked for 5 minutes.
+  const IDLE_FIDGET_DELAY = 300;
   const FIDGET_FPS = 8;
 
   function drawTroll(px, py, w, h, facing) {
@@ -1649,6 +1675,9 @@
 
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
+    // Touch taps on the play area do nothing — phones have dedicated
+    // buttons, and stray thumbs were causing accidental jumps.
+    if (e.pointerType === "touch") return;
     jump();
   });
 

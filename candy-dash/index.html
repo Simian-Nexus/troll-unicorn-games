@@ -4,7 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Troll & Unicorn: Candy Dash</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/png" href="assets/logo.png" />
+  <!-- ?v= is a cache-buster: bump it whenever this file or the css/js change
+       so phones pick up the new version without a manual cache clear. -->
+  <link rel="stylesheet" href="style.css?v=3" />
 </head>
 <body>
   <div id="game-wrap">
@@ -18,7 +21,7 @@
         <p class="quote" id="menu-quote">"Statistically, most of you will hit the first obstacle."</p>
       </div>
       <p class="howto">
-        <b>Space</b> / tap to jump — press again mid-air to double jump if you have 4+ candy
+        <b>Space</b> or ⤒ to jump — press again mid-air to double jump if you have 4+ candy
         charged. <b>Arrow keys</b> or ◀ ▶ to explore (nothing auto-scrolls); hold <b>Down</b>/S or ▼ to
         crouch and aim low. Collect Matrix-energy candies to charge Sparkles' horn (3 per shot,
         and it also trickles back slowly on its own — wait around if you run dry); press
@@ -59,9 +62,9 @@
       <div class="ctrl-cluster">
         <button id="left-btn" class="ctrl-btn" aria-label="Move left">◀</button>
         <button id="right-btn" class="ctrl-btn" aria-label="Move right">▶</button>
+        <button id="crouch-btn" class="ctrl-btn" aria-label="Crouch">▼</button>
       </div>
       <div class="ctrl-cluster">
-        <button id="crouch-btn" class="ctrl-btn" aria-label="Crouch">▼</button>
         <button id="blast-btn" class="ctrl-btn ctrl-blast" aria-label="Horn blast">✦</button>
         <button id="jump-btn" class="ctrl-btn ctrl-jump" aria-label="Jump">⤒</button>
       </div>
@@ -75,6 +78,6 @@
     </div>
   </div>
 
-  <script src="game.js"></script>
+  <script src="game.js?v=3"></script>
 </body>
 </html>
