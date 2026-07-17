@@ -2125,7 +2125,11 @@
   // sits. UNICORN_HIDE_OFFSET_X keeps most of her occluded by the portal.
   const UNICORN_SEAT_OFFSET_X = -115;
   const UNICORN_HIDE_OFFSET_X = -18;
-  const UNICORN_SEAT_SIZE = 95;
+  // A touch smaller than Troll (86), drawn at the art's own aspect ratio and
+  // planted on the ground — no bobbing, she's sitting, not hovering. The +2
+  // sink swallows the sprite's transparent bottom padding.
+  const UNICORN_SEAT_H = 78;
+  const UNICORN_FOOT_SINK = 2;
   const UNICORN_EMERGE_TIME = 1.2;
   const UNICORN_CALL_LINE = "Quick, Thpooth — bring me that energy!";
 
@@ -2135,8 +2139,8 @@
     const ease = t * t * (3 - 2 * t);
     const x =
       portal.x + UNICORN_HIDE_OFFSET_X + (UNICORN_SEAT_OFFSET_X - UNICORN_HIDE_OFFSET_X) * ease;
-    const bob = Math.sin(elapsed * 1.8) * 2;
-    ctx.drawImage(unicornSitImg, x, GROUND_Y - UNICORN_SEAT_SIZE + bob, UNICORN_SEAT_SIZE, UNICORN_SEAT_SIZE);
+    const uw = UNICORN_SEAT_H * (unicornSitImg.naturalWidth / unicornSitImg.naturalHeight);
+    ctx.drawImage(unicornSitImg, x, GROUND_Y - UNICORN_SEAT_H + UNICORN_FOOT_SINK, uw, UNICORN_SEAT_H);
     // once she's out, she calls Troll over (unless the beam is already going)
     if (
       bossDefeated &&
@@ -2145,15 +2149,15 @@
       unicornEmerge < UNICORN_EMERGE_TIME + 3.5
     ) {
       const a = Math.min(1, unicornEmerge - UNICORN_EMERGE_TIME);
-      drawBubble(x + UNICORN_SEAT_SIZE / 2, GROUND_Y - UNICORN_SEAT_SIZE - 6, UNICORN_CALL_LINE, 260, a);
+      drawBubble(x + uw / 2, GROUND_Y - UNICORN_SEAT_H - 6, UNICORN_CALL_LINE, 260, a);
     }
   }
 
   function drawPortalBeam() {
     const t = Math.min(1, portalActivateTimer / PORTAL_BEAM_HIT_AT);
     // her horn sits near the top-centre of the seated sprite
-    const ux = portal.x + UNICORN_SEAT_OFFSET_X + UNICORN_SEAT_SIZE * 0.55;
-    const uy = GROUND_Y - UNICORN_SEAT_SIZE * 0.92;
+    const ux = portal.x + UNICORN_SEAT_OFFSET_X + UNICORN_SEAT_H * 0.5;
+    const uy = GROUND_Y - UNICORN_SEAT_H * 0.9;
     if (t < 0.7) {
       // charge-up glow at the horn before the beam fires
       const glow = t / 0.7;
@@ -2713,9 +2717,9 @@
     drawPortal({ x: portalX, y: GROUND_Y - 70, active: true });
 
     if (unicornSitImg.complete && unicornSitImg.naturalWidth) {
-      const uw = 110,
-        uh = 110;
-      ctx.drawImage(unicornSitImg, portalX + 60, GROUND_Y - uh, uw, uh);
+      const uh = UNICORN_SEAT_H;
+      const uw = uh * (unicornSitImg.naturalWidth / unicornSitImg.naturalHeight);
+      ctx.drawImage(unicornSitImg, portalX + 60, GROUND_Y - uh + UNICORN_FOOT_SINK, uw, uh);
     }
 
     // Shows whichever creature the boss actually was (purifiedSprites.brute),
