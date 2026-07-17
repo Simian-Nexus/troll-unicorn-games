@@ -30,6 +30,11 @@
   const rightBtn = document.getElementById("right-btn");
   const jumpBtn = document.getElementById("jump-btn");
   const blastBtn = document.getElementById("blast-btn");
+  const crouchBtn = document.getElementById("crouch-btn");
+
+  // Coarse pointer = phone/tablet. Touch buttons only appear there; on
+  // desktop they'd just cover the play area.
+  const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
 
   // --- Art ---------------------------------------------------------------
   // Player is Troll (canon: episode 7.5 — Troll explores the corrupted realms
@@ -1574,23 +1579,43 @@
     if (el) el.classList.remove("hidden");
   }
 
+  // Best-effort: on phones, go fullscreen and lock to landscape when play
+  // starts. Android Chrome honours both (lock requires fullscreen first);
+  // iOS Safari supports neither, which is what the CSS rotate overlay is
+  // for. Must be called from a user gesture (the Play/Retry button counts).
+  function enterMobileFullscreen() {
+    if (!isTouchDevice) return;
+    const el = document.documentElement;
+    const fsPromise =
+      !document.fullscreenElement && el.requestFullscreen
+        ? el.requestFullscreen().catch(() => {})
+        : Promise.resolve();
+    fsPromise.then(() => {
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock("landscape").catch(() => {});
+      }
+    });
+  }
+
   function startGame() {
+    enterMobileFullscreen();
     player = null;
     score = 0;
     loadLevel(0);
     state = "playing";
     showScreen(null);
     hud.classList.remove("hidden");
-    touchControls.classList.remove("hidden");
+    if (isTouchDevice) touchControls.classList.remove("hidden");
   }
 
   function retryLevel() {
+    enterMobileFullscreen();
     score = Math.max(0, score - 20);
     loadLevel(currentLevelIndex);
     state = "playing";
     showScreen(null);
     hud.classList.remove("hidden");
-    touchControls.classList.remove("hidden");
+    if (isTouchDevice) touchControls.classList.remove("hidden");
   }
 
   function gameOver() {
@@ -1648,6 +1673,11 @@
     rightBtn,
     () => (input.right = true),
     () => (input.right = false)
+  );
+  bindHold(
+    crouchBtn,
+    () => (input.down = true),
+    () => (input.down = false)
   );
   jumpBtn.addEventListener("pointerdown", (e) => {
     e.preventDefault();

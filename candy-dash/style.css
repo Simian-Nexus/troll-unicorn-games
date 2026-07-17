@@ -25,6 +25,9 @@ html, body {
   position: relative;
   width: 100vw;
   height: 100vh;
+  /* dvh tracks the real visible area on phones (browser address bar shrinks
+     and grows); falls back to the 100vh above where unsupported */
+  height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -36,8 +39,9 @@ canvas {
   display: block;
   max-width: 100vw;
   max-height: 100vh;
+  max-height: 100dvh;
   aspect-ratio: 960 / 600;
-  touch-action: manipulation;
+  touch-action: none;
   cursor: pointer;
 }
 
@@ -47,11 +51,19 @@ canvas {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   gap: 12px;
   text-align: center;
   padding: 24px;
   background: rgba(216, 227, 248, 0.94);
+  overflow-y: auto;
+}
+
+/* Flex spacers instead of justify-content: center so that when the content is
+   taller than a short phone screen, the top stays reachable by scrolling. */
+.screen::before,
+.screen::after {
+  content: "";
+  flex: 1 0 0;
 }
 
 .hidden { display: none !important; }
@@ -138,8 +150,8 @@ h2 {
 
 #hud {
   position: absolute;
-  top: 16px;
-  right: 22px;
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  right: calc(22px + env(safe-area-inset-right, 0px));
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -212,15 +224,23 @@ h2 {
   50% { filter: brightness(1.5); }
 }
 
+/* Movement cluster bottom-left, action cluster bottom-right — under the
+   thumbs on a landscape phone, keeping the middle of the screen clear. */
 #touch-controls {
   position: absolute;
-  bottom: 18px;
-  left: 0;
-  right: 0;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  left: calc(16px + env(safe-area-inset-left, 0px));
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.ctrl-cluster {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 18px;
+  gap: 14px;
   pointer-events: none;
 }
 
@@ -240,6 +260,7 @@ h2 {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .ctrl-jump {
@@ -259,4 +280,101 @@ h2 {
   color: var(--brand-ink);
   box-shadow: 0 0 16px 4px rgba(220, 196, 143, 0.8);
   animation: horn-pulse 0.6s ease-in-out infinite;
+}
+
+/* --- Phones ------------------------------------------------------------- */
+
+/* Portrait on a touch device: the game is landscape-only, so cover
+   everything with a "rotate your phone" card. Orientation lock via the
+   web API only works on Android in fullscreen; on iPhone this overlay
+   IS the landscape enforcement. */
+#rotate-hint {
+  display: none;
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+  #rotate-hint {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    background: var(--shadow-navy);
+    color: var(--bg);
+    text-align: center;
+    padding: 32px;
+  }
+}
+
+.rotate-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.rotate-icon {
+  font-size: 56px;
+  animation: rotate-nudge 1.6s ease-in-out infinite;
+}
+
+.rotate-card p {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+@keyframes rotate-nudge {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-90deg); }
+}
+
+/* Short landscape screens (phones held sideways): tighten the menu so the
+   Play button is visible without scrolling, and slightly shrink controls. */
+@media (max-height: 500px) {
+  .screen {
+    gap: 8px;
+    padding: 12px 20px;
+  }
+
+  .logo {
+    max-width: 150px;
+  }
+
+  .portrait {
+    width: 52px;
+    height: 52px;
+  }
+
+  .portrait.small {
+    width: 48px;
+    height: 48px;
+  }
+
+  /* Put the Play button above the long how-to text so it's on screen
+     without scrolling; the instructions stay reachable below it. */
+  .howto {
+    font-size: 11px;
+    line-height: 1.35;
+    max-width: min(94vw, 560px);
+    order: 1;
+  }
+
+  .highscore {
+    order: 2;
+  }
+
+  .screen::after {
+    order: 3;
+  }
+
+  .btn {
+    font-size: 16px;
+    padding: 10px 28px;
+  }
+
+  #horn-meter {
+    height: 90px;
+  }
 }

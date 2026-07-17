@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Troll & Unicorn: Candy Dash</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -19,7 +19,7 @@
       </div>
       <p class="howto">
         <b>Space</b> / tap to jump — press again mid-air to double jump if you have 4+ candy
-        charged. <b>Arrow keys</b> or ◀ ▶ to explore (nothing auto-scrolls); hold <b>Down</b>/S to
+        charged. <b>Arrow keys</b> or ◀ ▶ to explore (nothing auto-scrolls); hold <b>Down</b>/S or ▼ to
         crouch and aim low. Collect Matrix-energy candies to charge Sparkles' horn (3 per shot,
         and it also trickles back slowly on its own — wait around if you run dry); press
         <b>X</b> or ✦ to fire a bolt and purify a corrupted creature back to its true form.
@@ -56,10 +56,22 @@
     </div>
 
     <div id="touch-controls" class="hidden">
-      <button id="left-btn" class="ctrl-btn" aria-label="Move left">◀</button>
-      <button id="jump-btn" class="ctrl-btn ctrl-jump" aria-label="Jump">⤒</button>
-      <button id="blast-btn" class="ctrl-btn ctrl-blast" aria-label="Horn blast">✦</button>
-      <button id="right-btn" class="ctrl-btn" aria-label="Move right">▶</button>
+      <div class="ctrl-cluster">
+        <button id="left-btn" class="ctrl-btn" aria-label="Move left">◀</button>
+        <button id="right-btn" class="ctrl-btn" aria-label="Move right">▶</button>
+      </div>
+      <div class="ctrl-cluster">
+        <button id="crouch-btn" class="ctrl-btn" aria-label="Crouch">▼</button>
+        <button id="blast-btn" class="ctrl-btn ctrl-blast" aria-label="Horn blast">✦</button>
+        <button id="jump-btn" class="ctrl-btn ctrl-jump" aria-label="Jump">⤒</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="rotate-hint">
+    <div class="rotate-card">
+      <span class="rotate-icon">📱⟳</span>
+      <p>Turn your phone sideways to play!</p>
     </div>
   </div>
 
