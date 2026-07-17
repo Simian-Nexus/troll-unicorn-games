@@ -339,6 +339,14 @@
   const PUZZLE_LINE = "Tap a piece next to the gap to slide it. Restore the rune!";
   const PUZZLE_TITLE = "The Rune of Resilience";
   const NEED_PIECES_LINE = "The pedestal hums... but I'm still missing rune pieces.";
+  const PIECES_VIEW_SECONDS = 6; // tap the HUD artifact icon to peek at pieces
+
+  // Fall damage. The playfield is one screen tall; a drop of about 3/4 of a
+  // screen stings, and a really huge fall (knockback bounces can exceed a
+  // screen) hurts double.
+  const FALL_DAMAGE_MIN_DIST = 450;
+  const FALL_DAMAGE_BIG_DIST = 900;
+  const FALL_DAMAGE = 2;
 
   // Intro cutscene timeline (seconds). King Angus appears in a portal swirl,
   // delivers the quest, fades; Troll grumbles. Jump skips it.
@@ -572,7 +580,8 @@
   // Run-wide progress (survives level loads within one run, reset by startGame)
   let artifactsTaken = LEVELS.map(() => false);
   let artifactsAssembled = false;
-  let puzzle = null; // active assembly minigame, see updatePuzzle()
+  let puzzle = null; // active assembly minigame
+  let piecesViewTimer = 0; // rune-pieces popup (tap the HUD artifact icon)
   const input = { left: false, right: false, down: false };
   let moveAxis = 0; // analog left/right from the touch slide track, -1..1
   const DIALOGUE_DURATION = 2.4;
@@ -644,6 +653,7 @@
       hurtTimer: 0,
       shield: player ? player.shield || 0 : 0,
       shieldFlash: 0,
+      fallStartY: null,
       hornCharge: Math.min(HORN_CHARGE_MAX, prevCharge || 0),
       doubleJumped: false,
       crouching: false,
@@ -905,6 +915,11 @@
     player.y += player.vy * dt;
     const footY = player.y + player.h;
 
+    // Track where the current descent began (reset while moving upward, so
+    // a double jump restarts the measurement from the new apex).
+    if (player.vy <= 0) player.fallStartY = null;
+    else if (player.fallStartY == null) player.fallStartY = player.y;
+
     let landed = false;
     if (wasFalling) {
       for (const p of platforms) {
@@ -929,6 +944,17 @@
         player.squash = 1.28;
         dust.push({ x: player.x + player.w / 2, y: player.y + player.h, life: 0.35, age: 0 });
       }
+      // Fall damage from big drops (measured from the descent's start).
+      if (!player.grounded && player.fallStartY != null) {
+        const fallDist = player.y - player.fallStartY;
+        if (fallDist > FALL_DAMAGE_MIN_DIST) {
+          const dmg = fallDist > FALL_DAMAGE_BIG_DIST ? FALL_DAMAGE * 2 : FALL_DAMAGE;
+          // hurtTimer gate inside damagePlayer still applies; source is
+          // himself, so the knockback is just a small ouch-bounce.
+          damagePlayer(dmg, player.x + player.w / 2);
+        }
+      }
+      player.fallStartY = null;
       player.vy = 0;
       player.grounded = true;
       player.doubleJumped = false;
@@ -1038,6 +1064,7 @@
       player.shield = Math.min(SHIELD_MAX, player.shield + SHIELD_REGEN_PER_SEC * dt);
     if (player.shieldFlash > 0) player.shieldFlash -= dt;
     if (player.hurtTimer > 0) player.hurtTimer -= dt;
+    if (piecesViewTimer > 0) piecesViewTimer -= dt;
     player.crouching = player.grounded && input.down;
     if (player.grounded && !player.crouching && Math.abs(player.vx) < 10) {
       player.idleTimer += dt;
@@ -1448,6 +1475,74 @@
       g.fill();
     }
     return runeCanvas;
+  }
+
+  // Quick peek at collected rune pieces (tap the HUD artifact icon): the
+  // pieces sit in their home cells, missing ones are dark slots with a "?".
+  function drawPiecesView() {
+    const rune = getRuneCanvas();
+    const scale = 0.72;
+    const cell = PUZZLE_CELL * scale;
+    const gap = PUZZLE_GAP * scale;
+    const bw = PUZZLE_COLS * cell + (PUZZLE_COLS + 1) * gap;
+    const bh = PUZZLE_ROWS * cell + (PUZZLE_ROWS + 1) * gap;
+    const bx = W / 2 - bw / 2;
+    const by = H / 2 - bh / 2 + 10;
+    const count = artifactsTaken.filter(Boolean).length;
+    ctx.save();
+    ctx.fillStyle = "rgba(19, 29, 49, 0.55)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#f2e8cf";
+    ctx.textAlign = "center";
+    ctx.font = "bold 30px Segoe UI, sans-serif";
+    ctx.fillText(`Rune Pieces — ${count} / ${PUZZLE_PIECES}`, W / 2, by - 40);
+    ctx.font = "20px Segoe UI, sans-serif";
+    ctx.fillText(
+      count >= PUZZLE_PIECES
+        ? "All pieces found! Take them to the pedestal."
+        : "One piece hides in every level. (tap to close)",
+      W / 2,
+      by - 12
+    );
+    ctx.fillStyle = "#203252";
+    ctx.strokeStyle = "#dcc48f";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(bx - 6, by - 6, bw + 12, bh + 12, 12);
+    ctx.fill();
+    ctx.stroke();
+    for (let c = 0; c < PUZZLE_COLS * PUZZLE_ROWS; c++) {
+      const col = c % PUZZLE_COLS;
+      const row = Math.floor(c / PUZZLE_COLS);
+      const x = bx + gap + col * (cell + gap);
+      const y = by + gap + row * (cell + gap);
+      const isPiece = c < PUZZLE_PIECES; // cell 5 is the puzzle's empty slot
+      if (isPiece && artifactsTaken[c]) {
+        ctx.drawImage(
+          rune,
+          col * PUZZLE_CELL,
+          row * PUZZLE_CELL,
+          PUZZLE_CELL,
+          PUZZLE_CELL,
+          x,
+          y,
+          cell,
+          cell
+        );
+        ctx.strokeStyle = "#131d31";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, cell, cell);
+      } else {
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(x, y, cell, cell);
+        if (isPiece) {
+          ctx.fillStyle = "rgba(242, 232, 207, 0.5)";
+          ctx.font = "bold 30px Segoe UI, sans-serif";
+          ctx.fillText("?", x + cell / 2, y + cell / 2 + 10);
+        }
+      }
+    }
+    ctx.restore();
   }
 
   function drawPuzzle() {
@@ -2468,7 +2563,9 @@
     if (dialogueTimer > 0) drawDialogue();
     if (intro) drawIntro();
     ctx.restore();
-    if (puzzle) drawPuzzle(); // screen-space overlay, unaffected by camera
+    // screen-space overlays, unaffected by camera
+    if (puzzle) drawPuzzle();
+    else if (piecesViewTimer > 0) drawPiecesView();
   }
 
   function drawFinaleScene() {
@@ -2515,7 +2612,8 @@
       update(dt);
       hudScore.textContent = Math.floor(score);
       if (hudLevel) hudLevel.textContent = `Level ${currentLevelIndex + 1}/${LEVELS.length}`;
-      hudArtifact.classList.toggle("hidden-slot", !artifact && artifactCollected);
+      // Always visible — it doubles as the rune-pieces viewer button.
+      hudArtifact.classList.remove("hidden-slot");
       hudArtifact.classList.toggle("found", artifactCollected);
       const pct = (player.hornCharge / HORN_CHARGE_MAX) * 100;
       hornFill.style.height = pct + "%";
@@ -2629,6 +2727,10 @@
   }
   settingsBtn.addEventListener("click", openSettings);
   hudSettingsBtn.addEventListener("click", openSettings);
+  hudArtifact.addEventListener("click", () => {
+    if (state !== "playing" || puzzle) return;
+    piecesViewTimer = piecesViewTimer > 0 ? 0 : PIECES_VIEW_SECONDS;
+  });
   settingsDoneBtn.addEventListener("click", closeSettings);
   setSound.addEventListener("change", () => {
     settings.sound = setSound.checked;
@@ -2658,6 +2760,10 @@
     // touch and mouse both slide tiles there.
     if (puzzle && state === "playing") {
       puzzleTap(e.clientX, e.clientY);
+      return;
+    }
+    if (piecesViewTimer > 0) {
+      piecesViewTimer = 0; // tap anywhere closes the rune-pieces peek
       return;
     }
     // Otherwise touch taps on the play area do nothing — phones have
