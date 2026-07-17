@@ -200,6 +200,65 @@ h2 {
   text-shadow: 0 2px 0 var(--surface);
 }
 
+#health-meter {
+  width: 110px;
+  height: 14px;
+  border-radius: 8px;
+  border: 2px solid var(--shadow-navy);
+  background: rgba(255, 255, 255, 0.6);
+  overflow: hidden;
+}
+
+#health-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #b43a52, #e15b78);
+  transition: width 0.2s ease-out;
+}
+
+#hud-settings {
+  pointer-events: auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid var(--shadow-navy);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--navy);
+  font-size: 17px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.btn-small {
+  font-size: 14px;
+  padding: 8px 20px;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(84vw, 360px);
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.setting-row input[type="range"] {
+  width: 150px;
+}
+
+.setting-row input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+}
+
 #horn-meter {
   width: 22px;
   height: 130px;
@@ -252,8 +311,8 @@ h2 {
 
 .ctrl-btn {
   pointer-events: auto;
-  width: 58px;
-  height: 58px;
+  width: var(--ctrl-size, 58px);
+  height: var(--ctrl-size, 58px);
   border-radius: 50%;
   border: 2px solid var(--shadow-navy);
   background: rgba(255, 255, 255, 0.55);
@@ -270,9 +329,14 @@ h2 {
 }
 
 .ctrl-jump {
-  width: 66px;
-  height: 66px;
+  width: calc(var(--ctrl-size, 58px) + 8px);
+  height: calc(var(--ctrl-size, 58px) + 8px);
   background: rgba(220, 196, 143, 0.75);
+}
+
+/* Settings: swap which thumb gets movement vs actions. */
+#touch-controls.swapped {
+  flex-direction: row-reverse;
 }
 
 .ctrl-blast {

@@ -31,10 +31,39 @@
   const jumpBtn = document.getElementById("jump-btn");
   const blastBtn = document.getElementById("blast-btn");
   const crouchBtn = document.getElementById("crouch-btn");
+  const healthFill = document.getElementById("health-fill");
+  const settingsScreen = document.getElementById("settings");
+  const settingsBtn = document.getElementById("settings-btn");
+  const hudSettingsBtn = document.getElementById("hud-settings");
+  const settingsDoneBtn = document.getElementById("settings-done");
+  const setSound = document.getElementById("set-sound");
+  const setVolume = document.getElementById("set-volume");
+  const setSwap = document.getElementById("set-swap");
+  const setSize = document.getElementById("set-size");
 
   // Coarse pointer = phone/tablet. Touch buttons only appear there; on
   // desktop they'd just cover the play area.
   const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
+
+  // --- Settings (persisted) ------------------------------------------------
+  const SETTINGS_KEY = "tu_candydash_settings";
+  let settings = { sound: true, volume: 0.7, swapSides: false, btnSize: 58 };
+  try {
+    settings = Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
+  } catch (e) {
+    /* corrupted settings, use defaults */
+  }
+  function saveSettings() {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  }
+  function applySettings() {
+    document.documentElement.style.setProperty("--ctrl-size", settings.btnSize + "px");
+    touchControls.classList.toggle("swapped", settings.swapSides);
+    setSound.checked = settings.sound;
+    setVolume.value = String(settings.volume);
+    setSwap.checked = settings.swapSides;
+    setSize.value = String(settings.btnSize);
+  }
 
   // --- Art ---------------------------------------------------------------
   // Player is Troll (canon: episode 7.5 — Troll explores the corrupted realms
@@ -149,13 +178,15 @@
     {
       img: loadImg("assets/forest/terrain/ground-3.png"),
       surfaceFrac: 0.14,
-      // This one ("Broken Edge") is drawn as a raised mound, not a flat
-      // strip — its middle sits visibly higher than surfaceFrac. Rather than
-      // full continuous slope physics, it gets one elevated flat collider
-      // matching the mound's rough peak height/span (measured via PIL:
-      // per-column top-opaque-row scan, 2026-07-15), pushed into `platforms`
-      // as a real (if approximate) step you can stand on top of.
-      bump: { xFrac0: 0.22, xFrac1: 0.7, topFrac: 0.03 },
+      // This one ("Broken Edge") is a raised mound, not a flat strip. Its
+      // lower-left green ledge sits on the surfaceFrac line (= GROUND_Y, so
+      // it's walkable via normal ground collision); the raised part gets two
+      // flat step colliders — a mid slope step and the wide upper plateau —
+      // measured via PIL per-column top-opaque-row scan (2026-07-16).
+      bumps: [
+        { xFrac0: 0.17, xFrac1: 0.3, topFrac: 0.085 },
+        { xFrac0: 0.3, xFrac1: 0.93, topFrac: 0.03 },
+      ],
     },
   ];
   const branchTile = loadImg("assets/forest/terrain/branch.png");
@@ -178,6 +209,9 @@
   // just bounces Troll back with a line of dialogue.
   const treeExitImg = loadImg("assets/forest/cutscene/tree-exit.png");
   const artifactImg = loadImg("assets/forest/cutscene/artifact.png");
+  // King Angus art hook: drop a transparent PNG at assets/king-angus.png and
+  // it replaces the procedural placeholder in the intro cutscene.
+  const kingImg = loadImg("assets/king-angus.png");
   // Cache of {img,x,w,h} ground-shelf segments spanning the current level,
   // rebuilt lazily (see drawGroundBand) once art has loaded and whenever
   // levelWidth changes — random per-segment choice from groundTilePool.
@@ -207,13 +241,14 @@
 
   let audioCtx = null;
   function beep(freq, dur, type = "square", vol = 0.05) {
+    if (!settings.sound || settings.volume <= 0) return;
     try {
       audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = type;
       osc.frequency.value = freq;
-      gain.gain.value = vol;
+      gain.gain.value = vol * settings.volume;
       osc.connect(gain).connect(audioCtx.destination);
       osc.start();
       gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
@@ -243,6 +278,30 @@
   const BOSS_PURIFY_DURATION = 1.5; // stays visible until the finale cut (1.4s)
   const HORN_REGEN_PER_SEC = 0.4; // slow passive trickle — full recharge from empty takes 25s
   const PORTAL_OPEN_COST = HORN_CHARGE_MAX; // the final portal needs a full charge to open
+
+  // Health: touching an enemy costs health rather than the run. Damage
+  // varies by enemy; a short invulnerability window follows each hit.
+  const PLAYER_MAX_HP = 10;
+  const TOUCH_DAMAGE = { drone: 2, grunt: 2, spitter: 2, brute: 3 };
+  const BOSS_TOUCH_DAMAGE = 4;
+  const SPIT_DAMAGE = 2; // spitter projectile
+  const HURT_INVULN = 1.2; // seconds of post-hit invulnerability (Troll flickers)
+  const HEART_HEAL = 5;
+
+  const DRONE_CHASE_SPEED = 160; // drones periodically break patrol and swoop at Troll
+  const DRONE_SWOOP_TIME = 1.5;
+  const BRIDGE_SAG = 10; // rope bridge dips this much at its middle
+
+  // Intro cutscene timeline (seconds). King Angus appears in a portal swirl,
+  // delivers the quest, fades; Troll grumbles. Jump skips it.
+  const INTRO_KING_IN = 0.9;
+  const INTRO_KING_OUT = 6.6;
+  const INTRO_END = 9.4;
+  const KING_LINE =
+    "Hey laddie — find the artifacts, assemble them, and get Unicorn to open the portal. Use your powers to cleanse this world.";
+  const TROLL_INTRO_LINE = "Urgh. Fine. Let's get this over with.";
+  const ASSEMBLE_DURATION = 2.2; // artifact-station merge animation length
+  const NEED_ASSEMBLY_LINE = "The artifacts... they want putting together first.";
 
   // --- Level data ------------------------------------------------------
   // 4 hand-authored levels = Realm 1, "The Whispering Forest" (episode 7.5 /
@@ -284,10 +343,16 @@
         { x: 700, y: TIER2_Y, w: 150 },
         { x: 1000, y: TIER1_Y, w: 170 },
         { x: 1300, y: TIER2_Y, w: 150 },
+        // High route to the heart: step up from the 1300 platform, cross the
+        // rope bridge, and the heart floats over the far perch.
+        { x: 1385, y: TIER2_Y - 55, w: 110 },
+        { x: 1450, y: TIER2_Y - 110, w: 460, bridge: true },
+        { x: 1930, y: TIER2_Y - 110, w: 130 },
         { x: 1650, y: TIER1_Y, w: 200 },
         { x: 2000, y: TIER2_Y, w: 160 },
         { x: 2350, y: TIER1_Y, w: 170 },
       ],
+      hearts: [{ x: 1995, y: TIER2_Y - 160 }],
       enemies: [
         { kind: "drone", x: 520, patrol: [470, 630] },
         { kind: "grunt", x: 900, patrol: [840, 1040] },
@@ -376,6 +441,7 @@
     obstacles,
     platforms,
     candies,
+    hearts,
     projectiles,
     sparkles,
     blasts,
@@ -386,6 +452,9 @@
     artifact,
     artifactCollected,
     bossDefeated,
+    intro,
+    station,
+    stationTimer,
     portalActivating,
     portalActivateTimer,
     portalBeamFired,
@@ -396,6 +465,9 @@
     elapsed,
     score,
     lastTime;
+  // Run-wide progress (survives level loads within one run, reset by startGame)
+  let artifactsTaken = [false, false, false, false];
+  let artifactsAssembled = false;
   const input = { left: false, right: false, down: false };
   const DIALOGUE_DURATION = 2.4;
   const DIALOGUE_COOLDOWN = 3;
@@ -421,7 +493,19 @@
         hp: BOSS_HP,
         isBoss: true,
       };
-    else e = { kind: "drone", x, y: GROUND_Y - 46, w: 40, h: 46, vx: 70, hp: 1 };
+    else
+      e = {
+        kind: "drone",
+        x,
+        y: GROUND_Y - 46,
+        w: 40,
+        h: 46,
+        vx: 70,
+        hp: 1,
+        homeY: GROUND_Y - 46,
+        swooping: 0,
+        swoopWait: 3 + Math.random() * 4,
+      };
     e.hpMax = e.hp;
     e.hitFlash = 0;
     if (patrolRange) {
@@ -438,6 +522,7 @@
     currentLevelIndex = idx;
     const lvl = LEVELS[idx];
     levelWidth = lvl.width;
+    const prevHp = player ? player.hp : PLAYER_MAX_HP;
     player = {
       x: 80,
       y: GROUND_Y - PLAYER_H,
@@ -449,15 +534,18 @@
       squash: 1,
       facing: 1,
       gallop: 0,
+      hp: prevHp > 0 ? prevHp : PLAYER_MAX_HP,
+      hurtTimer: 0,
       hornCharge: Math.min(HORN_CHARGE_MAX, prevCharge || 0),
       doubleJumped: false,
       crouching: false,
       idleTimer: 0,
     };
-    platforms = lvl.platforms.map((p) => ({ x: p.x, y: p.y, w: p.w, h: 18 }));
+    platforms = lvl.platforms.map((p) => ({ x: p.x, y: p.y, w: p.w, h: 18, bridge: !!p.bridge }));
     obstacles = lvl.enemies.map((e) => makeEnemy(e.kind, e.x, e.patrol));
     if (lvl.boss) obstacles.push(makeEnemy("boss", levelWidth - 500, lvl.boss.patrol));
     candies = lvl.candies.map((c) => ({ x: c.x, y: c.y, r: 13, taken: false }));
+    hearts = (lvl.hearts || []).map((h) => ({ x: h.x, y: h.y, taken: false }));
     projectiles = [];
     sparkles = [];
     blasts = [];
@@ -469,13 +557,23 @@
       // sequence around portalActivating).
       portal = { x: levelWidth - 140, y: GROUND_Y - 70, active: false };
       exitPoint = null;
+      // Mystical assembly station: the three artifacts must be combined here
+      // before the portal will respond at all.
+      station = { x: 1250, y: GROUND_Y };
+      stationTimer = -1; // -1 idle; >= 0 counts up through the merge animation
     } else {
       // Levels 1-3 end at a hollow tree, not a portal.
       portal = null;
       exitPoint = { x: levelWidth - 140, y: GROUND_Y };
+      station = null;
     }
-    artifact = lvl.artifact ? { x: lvl.artifact.x, y: lvl.artifact.y, r: 22, taken: false } : null;
-    artifactCollected = !lvl.artifact;
+    // Artifacts persist across levels within a run — one per levels 1-3,
+    // assembled on level 4 (see artifactsTaken / the station).
+    artifact =
+      lvl.artifact && !artifactsTaken[idx]
+        ? { x: lvl.artifact.x, y: lvl.artifact.y, r: 22, taken: false }
+        : null;
+    artifactCollected = artifactsTaken[idx] || !lvl.artifact;
     bossDefeated = false;
     portalActivating = false;
     portalActivateTimer = 0;
@@ -484,12 +582,18 @@
     dialogueMessage = null;
     dialogueTimer = 0;
     dialogueCooldown = 0;
+    intro = null;
     cameraX = 0;
     elapsed = 0;
   }
 
   function jump() {
     if (state !== "playing") return;
+    if (intro) {
+      // Any jump press past the first moment skips the intro cutscene.
+      if (intro.t > 0.6) intro = null;
+      return;
+    }
     if (player.grounded) {
       player.vy = JUMP_VELOCITY;
       player.grounded = false;
@@ -511,7 +615,7 @@
   // SHOT_COST candy, flies in the facing direction, purifies what it hits.
   // Crouching lowers the bolt so it can hit low/ground-hugging targets.
   function tryBlast() {
-    if (state !== "playing") return;
+    if (state !== "playing" || intro) return;
     if (player.hornCharge < SHOT_COST) {
       beep(220, 0.15, "triangle", 0.04);
       return;
@@ -598,8 +702,24 @@
     finaleScreen.classList.remove("hidden");
   }
 
+  // Touching or getting shot by an enemy costs health instead of the run;
+  // Troll is knocked back and briefly invulnerable. At 0 hp the run ends.
+  function damagePlayer(amount, sourceX) {
+    if (player.hurtTimer > 0) return;
+    player.hp -= amount;
+    player.hurtTimer = HURT_INVULN;
+    player.vx = (player.x + player.w / 2 < sourceX ? -1 : 1) * 320;
+    player.vy = Math.min(player.vy, -280);
+    player.grounded = false;
+    beep(180, 0.25, "sawtooth", 0.06);
+    if (player.hp <= 0) {
+      player.hp = 0;
+      gameOver();
+    }
+  }
+
   function updatePlayerMovement(dt) {
-    const dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    const dir = intro ? 0 : (input.right ? 1 : 0) - (input.left ? 1 : 0);
     if (dir !== 0) {
       player.vx += dir * MOVE_ACCEL * dt;
       player.facing = dir;
@@ -629,8 +749,11 @@
         // read as floating in mid-air next to the branch.
         const cx = player.x + player.w / 2;
         const withinX = cx > p.x - 6 && cx < p.x + p.w + 6;
-        if (withinX && prevFootY <= p.y + 1 && footY >= p.y) {
-          player.y = p.y - player.h;
+        // Rope bridges sag toward the middle; the walkable line follows.
+        const t = Math.max(0, Math.min(1, (cx - p.x) / p.w));
+        const surfY = p.bridge ? p.y + Math.sin(Math.PI * t) * BRIDGE_SAG : p.y;
+        if (withinX && prevFootY <= surfY + 6 && footY >= surfY) {
+          player.y = surfY - player.h;
           landed = true;
           break;
         }
@@ -672,14 +795,30 @@
           o.vx = dir * BOSS_CHASE_SPEED; // drawEnemy mirrors the sprite based on vx sign
           o.x = Math.max(60, Math.min(levelWidth - o.w - 60, o.x));
         }
+      } else if (o.kind === "drone" && o.swooping > 0) {
+        // Mid-swoop: dive toward Troll, ignoring the patrol route.
+        o.swooping -= dt;
+        const tx = player.x + player.w / 2 - o.w / 2;
+        const ty = player.y + player.h / 2 - o.h / 2;
+        o.x += Math.sign(tx - o.x) * Math.min(Math.abs(tx - o.x), DRONE_CHASE_SPEED * dt);
+        o.y += Math.sign(ty - o.y) * Math.min(Math.abs(ty - o.y), DRONE_CHASE_SPEED * 0.8 * dt);
+        if (tx !== o.x) o.vx = Math.sign(tx - o.x) * Math.abs(o.vx || 70);
+        if (o.swooping <= 0) o.swoopWait = 4 + Math.random() * 5;
       } else if (o.patrolMin !== undefined) {
         o.x += o.vx * dt;
-        if (o.x < o.patrolMin) {
-          o.x = o.patrolMin;
-          o.vx = Math.abs(o.vx);
-        } else if (o.x + o.w > o.patrolMax) {
-          o.x = o.patrolMax - o.w;
-          o.vx = -Math.abs(o.vx);
+        // Turn at the ends without snapping position — a swoop can carry a
+        // drone outside its patrol range, and it should fly back, not teleport.
+        if (o.x < o.patrolMin) o.vx = Math.abs(o.vx);
+        else if (o.x + o.w > o.patrolMax) o.vx = -Math.abs(o.vx);
+      }
+      if (o.kind === "drone" && o.swooping <= 0) {
+        // Glide back up to patrol altitude, and occasionally decide to swoop
+        // at Troll when he's close enough.
+        o.y += (o.homeY - o.y) * Math.min(1, dt * 2.5);
+        o.swoopWait -= dt;
+        if (o.swoopWait <= 0) {
+          if (Math.abs(player.x - o.x) < 420 && !intro) o.swooping = DRONE_SWOOP_TIME;
+          else o.swoopWait = 2;
         }
       }
       if (o.kind === "spitter") {
@@ -706,6 +845,11 @@
   function update(dt) {
     elapsed += dt;
 
+    if (intro) {
+      intro.t += dt;
+      if (intro.t >= INTRO_END) intro = null;
+    }
+
     if (pendingFinaleAt !== null && elapsed >= pendingFinaleAt) {
       pendingFinaleAt = null;
       enterFinale();
@@ -716,6 +860,7 @@
     updatePlayerVertical(dt);
     updateEnemies(dt);
     player.hornCharge = Math.min(HORN_CHARGE_MAX, player.hornCharge + HORN_REGEN_PER_SEC * dt);
+    if (player.hurtTimer > 0) player.hurtTimer -= dt;
     player.crouching = player.grounded && input.down;
     if (player.grounded && !player.crouching && Math.abs(player.vx) < 10) {
       player.idleTimer += dt;
@@ -754,7 +899,11 @@
         player.y + hitboxPad < o.y + o.h &&
         player.y + player.h - hitboxPad > o.y
       ) {
-        return gameOver();
+        damagePlayer(
+          o.isBoss ? BOSS_TOUCH_DAMAGE : TOUCH_DAMAGE[o.kind] || 2,
+          o.x + o.w / 2
+        );
+        if (state !== "playing") return;
       }
     }
 
@@ -787,11 +936,13 @@
       const dx = player.x + player.w / 2 - p.x;
       const dy = player.y + player.h / 2 - p.y;
       if (Math.hypot(dx, dy) < p.r + projPad) {
-        return gameOver();
+        p.hit = true;
+        damagePlayer(SPIT_DAMAGE, p.x);
+        if (state !== "playing") return;
       }
     }
     projectiles = projectiles.filter(
-      (p) => p.y < GROUND_Y + 30 && p.x > -50 && p.x < levelWidth + 50
+      (p) => !p.hit && p.y < GROUND_Y + 30 && p.x > -50 && p.x < levelWidth + 50
     );
 
     for (const c of candies) {
@@ -806,6 +957,18 @@
       }
     }
     candies = candies.filter((c) => !c.taken);
+
+    for (const h of hearts) {
+      if (h.taken) continue;
+      const dx = player.x + player.w / 2 - h.x;
+      const dy = player.y + player.h / 2 - h.y;
+      if (Math.hypot(dx, dy) < CANDY_PICKUP_R) {
+        h.taken = true;
+        score += 40;
+        player.hp = Math.min(PLAYER_MAX_HP, player.hp + HEART_HEAL);
+        beep(980, 0.25, "sine", 0.07);
+      }
+    }
 
     for (const s of sparkles) {
       if (s.taken) continue;
@@ -830,8 +993,40 @@
       if (Math.hypot(dx, dy) < CANDY_PICKUP_R + 10) {
         artifact.taken = true;
         artifactCollected = true;
+        artifactsTaken[currentLevelIndex] = true;
         score += 50;
         beep(1200, 0.3, "sine", 0.07);
+      }
+    }
+
+    // Assembly station (level 4): standing at it with the three artifacts
+    // triggers the merge; the portal stays inert until this has happened.
+    if (station && !artifactsAssembled) {
+      if (stationTimer >= 0) {
+        stationTimer += dt;
+        if (stationTimer >= ASSEMBLE_DURATION) {
+          artifactsAssembled = true;
+          for (let i = 0; i < 14; i++) {
+            const a = Math.random() * Math.PI * 2;
+            sparkles.push({
+              x: station.x,
+              y: station.y - 70,
+              vx: Math.cos(a) * 80,
+              vy: Math.sin(a) * 80 - 60,
+              r: 7,
+              taken: false,
+              life: 1.6,
+              age: 0,
+            });
+          }
+          beep(1500, 0.4, "sine", 0.08);
+        }
+      } else if (
+        Math.abs(player.x + player.w / 2 - station.x) < 70 &&
+        player.grounded
+      ) {
+        stationTimer = 0;
+        beep(900, 0.2, "sine", 0.06);
       }
     }
 
@@ -889,13 +1084,21 @@
       }
       return;
     }
-    const readyToActivate = bossDefeated && player.hornCharge >= PORTAL_OPEN_COST;
-    if (!readyToActivate) return;
     const overlap =
       player.x + player.w - 20 > portal.x - 60 &&
       player.x + 20 < portal.x + 60 &&
       player.y + player.h > portal.y - 90;
-    if (overlap) {
+    if (!overlap) return;
+    if (!artifactsAssembled) {
+      if (dialogueCooldown <= 0) {
+        dialogueMessage = NEED_ASSEMBLY_LINE;
+        dialogueTimer = DIALOGUE_DURATION;
+        dialogueCooldown = DIALOGUE_COOLDOWN;
+        beep(220, 0.15, "triangle", 0.04);
+      }
+      return;
+    }
+    if (bossDefeated && player.hornCharge >= PORTAL_OPEN_COST) {
       portalActivating = true;
       portalActivateTimer = 0;
       portalBeamFired = false;
@@ -939,14 +1142,19 @@
       // visibly lower/higher than chunks with less, a jagged walkable line.
       const y = GROUND_Y - tile.surfaceFrac * h;
       strip.push({ img: tile.img, x, y, w, h });
-      if (tile.bump) {
-        bumps.push({
-          x: x + tile.bump.xFrac0 * w,
-          y: GROUND_Y - tile.bump.topFrac * h,
-          w: (tile.bump.xFrac1 - tile.bump.xFrac0) * w,
-          h: 18,
-          groundBump: true,
-        });
+      if (tile.bumps) {
+        for (const b of tile.bumps) {
+          bumps.push({
+            x: x + b.xFrac0 * w,
+            // Art row `topFrac` sits at GROUND_Y + (topFrac - surfaceFrac)*h
+            // given the surfaceFrac anchor above; +3 swallows grass-blade
+            // tips so feet meet the soil line, not the tallest blade.
+            y: GROUND_Y + (b.topFrac - tile.surfaceFrac) * h + 3,
+            w: (b.xFrac1 - b.xFrac0) * w,
+            h: 18,
+            groundBump: true,
+          });
+        }
       }
       x += w;
     }
@@ -1170,9 +1378,51 @@
 
   function drawPlatform(p) {
     if (p.groundBump) return; // collision only — the ground art already shows this mound
+    if (p.bridge) {
+      // Procedural rope bridge: posts at each end, two sagging ropes, planks
+      // following the same sag curve the collision uses.
+      ctx.save();
+      ctx.fillStyle = "#5a4126";
+      ctx.strokeStyle = "#3d2b1f";
+      ctx.lineWidth = 2;
+      // end posts
+      for (const px of [p.x - 4, p.x + p.w - 4]) {
+        ctx.fillRect(px, p.y - 30, 8, 36);
+        ctx.strokeRect(px, p.y - 30, 8, 36);
+      }
+      // planks along the sag
+      const planks = Math.max(6, Math.round(p.w / 30));
+      for (let i = 0; i < planks; i++) {
+        const t = (i + 0.5) / planks;
+        const px = p.x + t * p.w;
+        const py = p.y + Math.sin(Math.PI * t) * BRIDGE_SAG;
+        ctx.fillStyle = i % 2 ? "#7a5c39" : "#6b4f30";
+        ctx.fillRect(px - 12, py, 24, 7);
+        ctx.strokeRect(px - 12, py, 24, 7);
+      }
+      // two guide ropes: one at plank level, one hand-height
+      ctx.strokeStyle = "#8a6d45";
+      ctx.lineWidth = 3;
+      for (const lift of [0, -22]) {
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y + lift - 4);
+        ctx.quadraticCurveTo(
+          p.x + p.w / 2,
+          p.y + lift - 4 + BRIDGE_SAG * 2,
+          p.x + p.w,
+          p.y + lift - 4
+        );
+        ctx.stroke();
+      }
+      ctx.restore();
+      return;
+    }
     if (branchTile.complete && branchTile.naturalWidth) {
       const drawH = branchTile.naturalHeight * (p.w / branchTile.naturalWidth);
-      ctx.drawImage(branchTile, p.x, p.y - drawH * 0.3, p.w, drawH);
+      // 0.365 = measured alpha-scan row of the branch art's walkable surface;
+      // +3px swallows the troll sprite's own transparent bottom padding, so
+      // his feet visually touch the moss instead of hovering above it.
+      ctx.drawImage(branchTile, p.x, p.y - drawH * 0.365 + 3, p.w, drawH);
       return;
     }
     ctx.save();
@@ -1305,20 +1555,34 @@
     ctx.restore();
   }
 
-  function drawDialogue() {
-    const alpha = Math.min(1, dialogueTimer / 0.4, (DIALOGUE_DURATION - dialogueTimer) / 0.3 + 1);
-    const cx = player.x + player.w / 2;
-    const cy = player.y - 34;
+  // Word-wrapped speech bubble with a tail pointing down at (cx, bottomY).
+  function drawBubble(cx, bottomY, text, maxW, alpha) {
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     ctx.font = "16px Segoe UI, sans-serif";
-    const metrics = ctx.measureText(dialogueMessage);
+    const words = text.split(" ");
+    const lines = [];
+    let line = "";
+    for (const word of words) {
+      const test = line ? line + " " + word : word;
+      if (ctx.measureText(test).width > maxW && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+    const lineH = 21;
     const padX = 14,
       padY = 10;
-    const boxW = metrics.width + padX * 2;
-    const boxH = 16 + padY * 2;
-    const bx = cx - boxW / 2;
-    const by = cy - boxH;
+    let boxW = 0;
+    for (const l of lines) boxW = Math.max(boxW, ctx.measureText(l).width);
+    boxW += padX * 2;
+    const boxH = lines.length * lineH + padY * 2;
+    // keep the bubble on screen horizontally (world space; camera is applied outside)
+    const bx = Math.max(cameraX + 8, Math.min(cameraX + W - boxW - 8, cx - boxW / 2));
+    const by = bottomY - boxH - 10;
     ctx.fillStyle = "rgba(255,255,255,0.95)";
     ctx.strokeStyle = "#131d31";
     ctx.lineWidth = 2;
@@ -1342,7 +1606,196 @@
     ctx.fillStyle = "#131d31";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(dialogueMessage, cx, by + boxH / 2);
+    lines.forEach((l, i) => {
+      ctx.fillText(l, bx + boxW / 2, by + padY + lineH * (i + 0.5));
+    });
+    ctx.restore();
+  }
+
+  function drawDialogue() {
+    const alpha = Math.min(1, dialogueTimer / 0.4, (DIALOGUE_DURATION - dialogueTimer) / 0.3 + 1);
+    drawBubble(player.x + player.w / 2, player.y - 24, dialogueMessage, 320, alpha);
+  }
+
+  function drawHeart(hh) {
+    if (hh.taken) return;
+    const bob = Math.sin((elapsed + hh.x * 0.02) * 3) * 5;
+    const pulse = 1 + Math.sin(elapsed * 5) * 0.08;
+    ctx.save();
+    ctx.translate(hh.x, hh.y + bob);
+    ctx.scale(pulse, pulse);
+    const grad = ctx.createRadialGradient(0, 0, 4, 0, 0, 42);
+    grad.addColorStop(0, "rgba(225, 91, 120, 0.5)");
+    grad.addColorStop(1, "rgba(225, 91, 120, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, 42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#e15b78";
+    ctx.strokeStyle = "#8e2f47";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(0, 16);
+    ctx.bezierCurveTo(-22, -2, -16, -20, 0, -8);
+    ctx.bezierCurveTo(16, -20, 22, -2, 0, 16);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Mystical assembly station on the final level: a stone pedestal where the
+  // three artifacts orbit, merge, and fuse into one glowing whole.
+  function drawStation() {
+    const sx = station.x;
+    const sy = station.y;
+    ctx.save();
+    // pedestal
+    ctx.fillStyle = "#5c6a82";
+    ctx.strokeStyle = "#203252";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(sx - 34, sy);
+    ctx.lineTo(sx - 22, sy - 52);
+    ctx.lineTo(sx + 22, sy - 52);
+    ctx.lineTo(sx + 34, sy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#7b89a3";
+    ctx.fillRect(sx - 28, sy - 58, 56, 8);
+    ctx.strokeRect(sx - 28, sy - 58, 56, 8);
+
+    const cy = sy - 96;
+    const assembling = stationTimer >= 0 && !artifactsAssembled;
+    const progress = assembling ? Math.min(1, stationTimer / ASSEMBLE_DURATION) : 0;
+    if (artifactsAssembled) {
+      // fused artifact hovering, strong glow
+      const bob = Math.sin(elapsed * 2.5) * 4;
+      const pulse = 0.7 + Math.sin(elapsed * 6) * 0.3;
+      const grad = ctx.createRadialGradient(sx, cy + bob, 8, sx, cy + bob, 60);
+      grad.addColorStop(0, `rgba(255, 244, 190, ${0.7 * pulse})`);
+      grad.addColorStop(1, "rgba(255, 244, 190, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(sx, cy + bob, 60, 0, Math.PI * 2);
+      ctx.fill();
+      if (artifactImg.complete && artifactImg.naturalWidth) {
+        const h = 74;
+        const w = h * (artifactImg.naturalWidth / artifactImg.naturalHeight);
+        ctx.drawImage(artifactImg, sx - w / 2, cy + bob - h / 2, w, h);
+      }
+    } else {
+      // three artifacts orbiting: slow while waiting, spiralling in during
+      // the merge
+      const spin = elapsed * (assembling ? 6 : 1.2);
+      const radius = 44 * (1 - progress);
+      for (let i = 0; i < 3; i++) {
+        const a = spin + (i * Math.PI * 2) / 3;
+        const ax = sx + Math.cos(a) * radius;
+        const ay = cy + Math.sin(a) * radius * 0.5;
+        ctx.save();
+        ctx.globalAlpha = 0.9;
+        if (artifactImg.complete && artifactImg.naturalWidth) {
+          const h = 36;
+          const w = h * (artifactImg.naturalWidth / artifactImg.naturalHeight);
+          ctx.drawImage(artifactImg, ax - w / 2, ay - h / 2, w, h);
+        } else {
+          ctx.fillStyle = "#dcc48f";
+          ctx.fillRect(ax - 7, ay - 12, 14, 24);
+        }
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Intro cutscene: King Angus materialises in a portal swirl ahead of Troll,
+  // delivers the quest, fades; Troll grumbles his acceptance.
+  function drawIntro() {
+    const t = intro.t;
+    const kx = player.x + 250; // king's centre x
+    const kFadeIn = Math.min(1, t / INTRO_KING_IN);
+    const kFadeOut = t > INTRO_KING_OUT ? Math.max(0, 1 - (t - INTRO_KING_OUT) / 0.8) : 1;
+    const kAlpha = kFadeIn * kFadeOut;
+
+    if (kAlpha > 0) {
+      ctx.save();
+      ctx.globalAlpha = kAlpha * 0.85;
+      // mystical swirl behind him (reuses the portal swirl art)
+      if (portalSwirlImg.complete && portalSwirlImg.naturalWidth) {
+        ctx.save();
+        ctx.translate(kx, GROUND_Y - 80);
+        ctx.rotate(elapsed * 1.2);
+        const sw = 180;
+        ctx.drawImage(portalSwirlImg, -sw / 2, -sw / 2, sw, sw);
+        ctx.restore();
+      }
+      ctx.globalAlpha = kAlpha;
+      if (kingImg.complete && kingImg.naturalWidth) {
+        const h = 150;
+        const w = h * (kingImg.naturalWidth / kingImg.naturalHeight);
+        ctx.drawImage(kingImg, kx - w / 2, GROUND_Y - h, w, h);
+      } else {
+        // Procedural placeholder king: robe, beard, crown. Replaced
+        // automatically once assets/king-angus.png exists.
+        ctx.translate(kx, GROUND_Y);
+        ctx.fillStyle = "#254f95";
+        ctx.strokeStyle = "#131d31";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); // robe
+        ctx.moveTo(-34, 0);
+        ctx.lineTo(-20, -95);
+        ctx.lineTo(20, -95);
+        ctx.lineTo(34, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#dcc48f"; // trim
+        ctx.fillRect(-26, -12, 52, 6);
+        ctx.beginPath(); // head
+        ctx.fillStyle = "#e8c39e";
+        ctx.arc(0, -108, 17, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#f4f4f0"; // beard
+        ctx.beginPath();
+        ctx.moveTo(-14, -102);
+        ctx.quadraticCurveTo(0, -68, 14, -102);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#dcc48f"; // crown
+        ctx.beginPath();
+        ctx.moveTo(-15, -122);
+        ctx.lineTo(-15, -134);
+        ctx.lineTo(-7, -126);
+        ctx.lineTo(0, -136);
+        ctx.lineTo(7, -126);
+        ctx.lineTo(15, -134);
+        ctx.lineTo(15, -122);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (t > INTRO_KING_IN && t < INTRO_KING_OUT) {
+      const a = Math.min(1, (t - INTRO_KING_IN) / 0.4) * kFadeOut;
+      drawBubble(kx, GROUND_Y - 150, KING_LINE, 300, a);
+    } else if (t > INTRO_KING_OUT + 0.4) {
+      const a = Math.min(1, (t - INTRO_KING_OUT - 0.4) / 0.4, (INTRO_END - t) / 0.4);
+      drawBubble(player.x + player.w / 2, player.y - 24, TROLL_INTRO_LINE, 300, a);
+    }
+
+    // skip hint (screen space, unaffected by camera — camera is 0 here anyway)
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = "#131d31";
+    ctx.font = "13px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("(jump to skip)", cameraX + W / 2, H - 14);
     ctx.restore();
   }
 
@@ -1461,6 +1914,8 @@
     if (!useCrouchFrames && !useRunFrames && !useJumpFrame && !useFidgetFrames && !fallbackReady) return;
 
     ctx.save();
+    // post-hit invulnerability flicker
+    if (player.hurtTimer > 0 && Math.floor(elapsed * 14) % 2 === 0) ctx.globalAlpha = 0.45;
     ctx.translate(px + w / 2, py + h);
 
     let tilt = 0;
@@ -1532,15 +1987,18 @@
       drawTreeExit(exitPoint);
     }
     if (artifact && !artifact.taken) drawArtifact(artifact);
+    if (station) drawStation();
     obstacles.forEach(drawEnemy);
     projectiles.forEach(drawProjectile);
     candies.forEach(drawCandy);
+    hearts.forEach(drawHeart);
     sparkles.forEach(drawSparkle);
     drawBolts();
     drawBlasts();
     drawDust();
     drawTroll(player.x, player.y, player.w, player.h, player.facing);
     if (dialogueTimer > 0) drawDialogue();
+    if (intro) drawIntro();
     ctx.restore();
   }
 
@@ -1592,6 +2050,7 @@
       hudArtifact.classList.toggle("found", artifactCollected);
       const pct = (player.hornCharge / HORN_CHARGE_MAX) * 100;
       hornFill.style.height = pct + "%";
+      healthFill.style.width = (player.hp / PLAYER_MAX_HP) * 100 + "%";
       const canShoot = player.hornCharge >= SHOT_COST;
       hornMeter.classList.toggle("full", canShoot);
       blastBtn.classList.toggle("ready", canShoot);
@@ -1601,7 +2060,9 @@
   }
 
   function showScreen(el) {
-    [overlay, gameoverScreen, finaleScreen].forEach((s) => s.classList.add("hidden"));
+    [overlay, gameoverScreen, finaleScreen, settingsScreen].forEach((s) =>
+      s.classList.add("hidden")
+    );
     if (el) el.classList.remove("hidden");
   }
 
@@ -1627,7 +2088,10 @@
     enterMobileFullscreen();
     player = null;
     score = 0;
+    artifactsTaken = [false, false, false, false];
+    artifactsAssembled = false;
     loadLevel(0);
+    intro = { t: 0 };
     state = "playing";
     showScreen(null);
     hud.classList.remove("hidden");
@@ -1672,6 +2136,46 @@
   startBtn.addEventListener("click", startGame);
   retryBtn.addEventListener("click", retryLevel);
   finaleBtn.addEventListener("click", startGame);
+
+  // --- Settings screen (pauses the game while open) ------------------------
+  let settingsReturnState = "menu";
+  function openSettings() {
+    settingsReturnState = state;
+    state = "paused";
+    [overlay, gameoverScreen, finaleScreen].forEach((s) => s.classList.add("hidden"));
+    settingsScreen.classList.remove("hidden");
+  }
+  function closeSettings() {
+    settingsScreen.classList.add("hidden");
+    state = settingsReturnState;
+    if (state === "menu") overlay.classList.remove("hidden");
+    else if (state === "gameover") gameoverScreen.classList.remove("hidden");
+    else if (state === "finale") finaleScreen.classList.remove("hidden");
+  }
+  settingsBtn.addEventListener("click", openSettings);
+  hudSettingsBtn.addEventListener("click", openSettings);
+  settingsDoneBtn.addEventListener("click", closeSettings);
+  setSound.addEventListener("change", () => {
+    settings.sound = setSound.checked;
+    saveSettings();
+    beep(880, 0.1, "sine", 0.06);
+  });
+  setVolume.addEventListener("input", () => {
+    settings.volume = Number(setVolume.value);
+    saveSettings();
+    beep(880, 0.1, "sine", 0.06);
+  });
+  setSwap.addEventListener("change", () => {
+    settings.swapSides = setSwap.checked;
+    saveSettings();
+    applySettings();
+  });
+  setSize.addEventListener("input", () => {
+    settings.btnSize = Number(setSize.value);
+    saveSettings();
+    applySettings();
+  });
+  applySettings();
 
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
