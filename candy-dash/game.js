@@ -155,9 +155,10 @@
 
   // Whispering Forest parallax + terrain. Downscaled from the Unity project's
   // production art (see tools/prep notes in docs/CANDY_DASH_2_PLAN.md).
-  function loadImg(src) {
+  function loadImg(src, onload) {
     src = av(src);
     const img = new Image();
+    if (onload) img.onload = () => onload(img);
     // A busy or flaky connection (or dev server) can drop an image request;
     // retry a couple of times so a sprite doesn't stay missing all session.
     let attempts = 0;
@@ -233,10 +234,27 @@
   // King Angus art hook: drop a transparent PNG at assets/king-angus.png and
   // it replaces the procedural placeholder in the intro cutscene.
   const kingImg = loadImg("assets/king-angus.png");
-  // Brute action poses (Jonathan's art): arms up during the boss's roar,
-  // arms forward while a brute is actively chasing Troll.
+  // Brute action poses (Jonathan's art): arms up during a roar, arms forward
+  // while a brute is actively chasing Troll.
   const bruteArmsUpImg = loadImg("assets/enemies/brute-arms-up.png");
   const bruteArmsForwardImg = loadImg("assets/enemies/brute-arms-forward.png");
+  // The Forest Captain's real Saurosapien pose art (cut from
+  // Saurosapiens/Type_1 sources; directional poses, so no mirroring).
+  const SAURO_POSES = [
+    "idle",
+    "alerted",
+    "about_to_shoot",
+    "ready_to_shoot_left",
+    "ready_to_shoot_right",
+    "shooting_left_pointing_down",
+    "shooting_left_pointing_straight",
+    "shooting_right_pointing_down",
+    "shooting_right_pointing_straight",
+  ];
+  const sauroSprites = {};
+  SAURO_POSES.forEach((pose) => {
+    loadImg(`assets/enemies/saurosapien/${pose}.png`, (img) => (sauroSprites[pose] = img));
+  });
   // Cache of {img,x,w,h} ground-shelf segments spanning the current level,
   // rebuilt lazily (see drawGroundBand) once art has loaded and whenever
   // levelWidth changes — random per-segment choice from groundTilePool.
@@ -298,6 +316,14 @@
   const BOSS_SCALE = 2.2;
   const BOSS_HP = 4;
   const BOSS_CHASE_SPEED = 85; // hunts Troll within his arena rather than pacing
+  // Forest Captain's blaster: telegraphed (about_to_shoot pose), then a
+  // straight blue bolt aimed at Troll's position when fired.
+  const BOSS_SHOOT_COOLDOWN = 3.2;
+  const BOSS_SHOOT_RANGE = 650;
+  const BOSS_TELEGRAPH = 0.6;
+  const BOSS_FIRE_POSE_TIME = 0.45;
+  const BOSS_BOLT_SPEED = 430;
+  const BOSS_BOLT_DAMAGE = 3;
   const DOUBLE_JUMP_COST = 2; // Matrix energy also powers a mid-air second jump
   const PURIFY_DURATION = 1.1; // seconds a purified critter hops away for
   const BOSS_PURIFY_DURATION = 1.5; // stays visible until the finale cut (1.4s)
@@ -607,6 +633,12 @@
         vx: 55,
         hp: BOSS_HP,
         isBoss: true,
+        faceDir: -1,
+        alertT: 0,
+        shootTimer: 2,
+        shootPhase: null, // null | "telegraph" | "fire"
+        phaseT: 0,
+        aimDown: false,
       };
     else
       e = {
@@ -971,15 +1003,61 @@
         // The boss hunts Troll. He sleeps until Troll approaches his arena,
         // then chases anywhere in the level — clamping him to the arena made
         // him park at its edge and just sit there whenever Troll fought from
-        // outside it.
+        // outside it. Once hunting, he periodically stops, takes aim
+        // (telegraph pose), and fires a straight blaster bolt.
         const targetX = player.x + player.w / 2 - o.w / 2;
         const diff = targetX - o.x;
-        if (!o.aggro && (Math.abs(diff) < 500 || player.x > o.patrolMin - 250)) o.aggro = true;
+        if (!o.aggro && (Math.abs(diff) < 500 || player.x > o.patrolMin - 250)) {
+          o.aggro = true;
+          o.alertT = 0.9; // strikes the "alerted" pose when he first wakes
+          beep(180, 0.4, "sawtooth", 0.07);
+        }
+        if (o.alertT > 0) o.alertT -= dt;
         if (o.aggro) {
-          const dir = Math.sign(diff);
-          o.x += dir * Math.min(Math.abs(diff), BOSS_CHASE_SPEED * dt);
-          o.vx = dir * BOSS_CHASE_SPEED; // drawEnemy mirrors the sprite based on vx sign
-          o.x = Math.max(60, Math.min(levelWidth - o.w - 60, o.x));
+          o.faceDir = Math.sign(diff) || o.faceDir;
+          o.shootTimer -= dt;
+          if (o.shootPhase === "telegraph") {
+            o.phaseT -= dt;
+            if (o.phaseT <= 0) {
+              // fire: straight bolt aimed at Troll's centre as of this moment
+              const bx = o.x + o.w / 2 + o.faceDir * o.w * 0.5;
+              const by = o.y + o.h * 0.4;
+              const dx = player.x + player.w / 2 - bx;
+              const dy = player.y + player.h / 2 - by;
+              const len = Math.hypot(dx, dy) || 1;
+              projectiles.push({
+                x: bx,
+                y: by,
+                vx: (dx / len) * BOSS_BOLT_SPEED,
+                vy: (dy / len) * BOSS_BOLT_SPEED,
+                r: 10,
+                noGravity: true,
+                bossBolt: true,
+                damage: BOSS_BOLT_DAMAGE,
+              });
+              o.aimDown = dy > 50;
+              o.shootPhase = "fire";
+              o.phaseT = BOSS_FIRE_POSE_TIME;
+              beep(950, 0.2, "sawtooth", 0.07);
+            }
+          } else if (o.shootPhase === "fire") {
+            o.phaseT -= dt;
+            if (o.phaseT <= 0) o.shootPhase = null;
+          } else if (
+            o.alertT <= 0 &&
+            o.shootTimer <= 0 &&
+            Math.abs(diff) < BOSS_SHOOT_RANGE
+          ) {
+            o.shootPhase = "telegraph";
+            o.phaseT = BOSS_TELEGRAPH;
+            o.shootTimer = BOSS_SHOOT_COOLDOWN + Math.random();
+          } else if (o.alertT <= 0) {
+            // only walks while not aiming/firing
+            const dir = Math.sign(diff);
+            o.x += dir * Math.min(Math.abs(diff), BOSS_CHASE_SPEED * dt);
+            o.vx = dir * BOSS_CHASE_SPEED;
+            o.x = Math.max(60, Math.min(levelWidth - o.w - 60, o.x));
+          }
         }
         o.chasing = o.aggro;
       } else if (o.kind === "drone" && o.swooping > 0) {
@@ -1134,19 +1212,20 @@
 
     const projPad = 6;
     for (const p of projectiles) {
-      p.vy += GRAVITY * 0.55 * dt;
+      if (!p.noGravity) p.vy += GRAVITY * 0.55 * dt;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       const dx = player.x + player.w / 2 - p.x;
       const dy = player.y + player.h / 2 - p.y;
       if (Math.hypot(dx, dy) < p.r + projPad) {
         p.hit = true;
-        damagePlayer(SPIT_DAMAGE, p.x);
+        damagePlayer(p.damage || SPIT_DAMAGE, p.x);
         if (state !== "playing") return;
       }
     }
     projectiles = projectiles.filter(
-      (p) => !p.hit && p.y < GROUND_Y + 30 && p.x > -50 && p.x < levelWidth + 50
+      (p) =>
+        !p.hit && p.y < GROUND_Y + 30 && p.y > -80 && p.x > -50 && p.x < levelWidth + 50
     );
 
     for (const c of candies) {
@@ -1780,9 +1859,23 @@
 
   function drawEnemy(o) {
     let sprite = o.purifying ? purifiedSprites[o.kind] || enemySprites[o.kind] : enemySprites[o.kind];
-    // Brute action poses: the boss throws his arms up mid-roar; any brute
-    // reaches arms-forward while actively chasing Troll.
-    if (o.kind === "brute" && !o.purifying) {
+    let noMirror = false;
+    if (o.isBoss && !o.purifying && sauroSprites.idle) {
+      // Real Saurosapien pose art. Directions are baked into the art, so the
+      // vx-based mirroring below is skipped entirely.
+      const dir = o.faceDir > 0 ? "right" : "left";
+      let pose;
+      if (!o.aggro) pose = "idle";
+      else if (o.alertT > 0) pose = "alerted";
+      else if (o.shootPhase === "telegraph") pose = "about_to_shoot";
+      else if (o.shootPhase === "fire")
+        pose = `shooting_${dir}_pointing_${o.aimDown ? "down" : "straight"}`;
+      else pose = `ready_to_shoot_${dir}`;
+      sprite = sauroSprites[pose] || sauroSprites.idle;
+      noMirror = true;
+    } else if (o.kind === "brute" && !o.purifying) {
+      // Brute action poses: arms up mid-roar (boss fallback while the
+      // Saurosapien art loads), arms forward while actively chasing.
       const roaring = o.isBoss && elapsed % 4 < 0.3;
       if (roaring && bruteArmsUpImg.complete && bruteArmsUpImg.naturalWidth) {
         sprite = bruteArmsUpImg;
@@ -1816,7 +1909,7 @@
       ctx.translate(pivotX, pivotY);
       ctx.scale(bossScale, bossScale);
       ctx.translate(-pivotX, -pivotY);
-      if (o.vx > 0) {
+      if (!noMirror && o.vx > 0) {
         // sprite art faces left by default; mirror when patrolling right
         ctx.translate(drawX + drawW, 0);
         ctx.scale(-1, 1);
@@ -1876,6 +1969,25 @@
   function drawProjectile(p) {
     ctx.save();
     ctx.translate(p.x, p.y);
+    if (p.bossBolt) {
+      // blue energy bolt matching the Saurosapien's blaster
+      const ang = Math.atan2(p.vy, p.vx);
+      ctx.rotate(ang);
+      const grad = ctx.createRadialGradient(0, 0, 1, 0, 0, p.r * 2.2);
+      grad.addColorStop(0, "rgba(220, 240, 255, 0.95)");
+      grad.addColorStop(0.45, "rgba(80, 160, 255, 0.8)");
+      grad.addColorStop(1, "rgba(80, 160, 255, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.r * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#dff2ff";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, p.r * 1.6, p.r * 0.55, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
     ctx.fillStyle = "#6b8a3f";
     ctx.beginPath();
     ctx.arc(0, 0, p.r, 0, Math.PI * 2);
