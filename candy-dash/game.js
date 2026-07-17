@@ -26,12 +26,14 @@
   const overQuote = document.getElementById("over-quote");
   const overPortrait = document.getElementById("over-portrait");
   const scoreLine = document.getElementById("score-line");
-  const leftBtn = document.getElementById("left-btn");
-  const rightBtn = document.getElementById("right-btn");
+  const moveTrack = document.getElementById("move-track");
+  const moveKnob = document.getElementById("move-knob");
   const jumpBtn = document.getElementById("jump-btn");
   const blastBtn = document.getElementById("blast-btn");
   const crouchBtn = document.getElementById("crouch-btn");
   const healthFill = document.getElementById("health-fill");
+  const shieldMeter = document.getElementById("shield-meter");
+  const shieldFill = document.getElementById("shield-fill");
   const settingsScreen = document.getElementById("settings");
   const settingsBtn = document.getElementById("settings-btn");
   const hudSettingsBtn = document.getElementById("hud-settings");
@@ -150,6 +152,19 @@
   // production art (see tools/prep notes in docs/CANDY_DASH_2_PLAN.md).
   function loadImg(src) {
     const img = new Image();
+    // A busy or flaky connection (or dev server) can drop an image request;
+    // retry a couple of times so a sprite doesn't stay missing all session.
+    let attempts = 0;
+    img.onerror = () => {
+      attempts += 1;
+      if (attempts <= 2) {
+        setTimeout(() => {
+          img.src = src + (src.includes("?") ? "&" : "?") + "retry=" + attempts;
+        }, 500 * attempts);
+      } else {
+        img.permanentlyFailed = true; // callers can stop waiting for it
+      }
+    };
     img.src = src;
     return img;
   }
@@ -212,6 +227,10 @@
   // King Angus art hook: drop a transparent PNG at assets/king-angus.png and
   // it replaces the procedural placeholder in the intro cutscene.
   const kingImg = loadImg("assets/king-angus.png");
+  // Brute action poses (Jonathan's art): arms up during the boss's roar,
+  // arms forward while a brute is actively chasing Troll.
+  const bruteArmsUpImg = loadImg("assets/enemies/brute-arms-up.png");
+  const bruteArmsForwardImg = loadImg("assets/enemies/brute-arms-forward.png");
   // Cache of {img,x,w,h} ground-shelf segments spanning the current level,
   // rebuilt lazily (see drawGroundBand) once art has loaded and whenever
   // levelWidth changes — random per-segment choice from groundTilePool.
@@ -273,7 +292,7 @@
   const BOSS_SCALE = 2.2;
   const BOSS_HP = 4;
   const BOSS_CHASE_SPEED = 85; // hunts Troll within his arena rather than pacing
-  const DOUBLE_JUMP_COST = 4; // Matrix energy also powers a mid-air second jump
+  const DOUBLE_JUMP_COST = 2; // Matrix energy also powers a mid-air second jump
   const PURIFY_DURATION = 1.1; // seconds a purified critter hops away for
   const BOSS_PURIFY_DURATION = 1.5; // stays visible until the finale cut (1.4s)
   const HORN_REGEN_PER_SEC = 0.4; // slow passive trickle — full recharge from empty takes 25s
@@ -290,7 +309,30 @@
 
   const DRONE_CHASE_SPEED = 160; // drones periodically break patrol and swoop at Troll
   const DRONE_SWOOP_TIME = 1.5;
+  // Ground critters also aggro: when Troll is close (and roughly at their
+  // height) they leave their patrol and walk at him.
+  const GROUND_AGGRO_RANGE = 380;
+  const GROUND_CHASE_SPEED = { grunt: 85, brute: 95 };
   const BRIDGE_SAG = 10; // rope bridge dips this much at its middle
+
+  // Energy shield, granted by assembling the artifacts: absorbs enemy hits
+  // (including the boss's) in place of health, then recharges slowly — same
+  // magical-energy feel as the horn meter.
+  const SHIELD_MAX = 6;
+  const SHIELD_REGEN_PER_SEC = 0.35;
+
+  // Assembly puzzle: the five artifact pieces (one hidden per level) are
+  // slices of the Eihwaz rune — resilience. At the station they go into a
+  // 2x3 sliding puzzle (one slot empty); slide the tiles to restore the rune
+  // and the fused artifact grants the energy shield.
+  const PUZZLE_COLS = 2;
+  const PUZZLE_ROWS = 3;
+  const PUZZLE_CELL = 96; // px per tile on the 960x600 canvas
+  const PUZZLE_GAP = 8;
+  const PUZZLE_PIECES = 5; // artifacts needed before the puzzle opens
+  const PUZZLE_LINE = "Tap a piece next to the gap to slide it. Restore the rune!";
+  const PUZZLE_TITLE = "The Rune of Resilience";
+  const NEED_PIECES_LINE = "The pedestal hums... but I'm still missing rune pieces.";
 
   // Intro cutscene timeline (seconds). King Angus appears in a portal swirl,
   // delivers the quest, fades; Troll grumbles. Jump skips it.
@@ -411,25 +453,81 @@
       artifact: { x: 2380, y: TIER2_Y - 60 },
     },
     {
-      name: "1-4 The Forest Captain",
-      width: 2200,
+      // Long gauntlet level — no artifact, just survival and platforming —
+      // added because the original 4 levels played through too quickly.
+      name: "1-4 The Tangled Deep",
+      width: 3800,
+      platforms: [
+        { x: 380, y: TIER1_Y, w: 170 },
+        { x: 660, y: TIER2_Y, w: 150 },
+        { x: 950, y: TIER1_Y, w: 160 },
+        { x: 1200, y: TIER2_Y, w: 140 },
+        { x: 1290, y: TIER2_Y - 110, w: 420, bridge: true },
+        { x: 1710, y: TIER2_Y - 110, w: 120 },
+        { x: 1500, y: TIER1_Y, w: 180 },
+        { x: 1850, y: TIER2_Y, w: 150 },
+        { x: 2150, y: TIER1_Y, w: 170 },
+        { x: 2450, y: TIER2_Y, w: 150 },
+        { x: 2750, y: TIER1_Y, w: 190 },
+        { x: 3070, y: TIER2_Y, w: 150 },
+        { x: 3380, y: TIER1_Y, w: 170 },
+      ],
+      enemies: [
+        { kind: "grunt", x: 520, patrol: [440, 660] },
+        { kind: "drone", x: 800, patrol: [740, 950] },
+        { kind: "spitter", x: 1120 },
+        { kind: "brute", x: 1450, patrol: [1350, 1620] },
+        { kind: "drone", x: 1800, patrol: [1740, 1950] },
+        { kind: "grunt", x: 2050, patrol: [1980, 2200] },
+        { kind: "spitter", x: 2350 },
+        { kind: "brute", x: 2650, patrol: [2550, 2850] },
+        { kind: "drone", x: 2950, patrol: [2890, 3100] },
+        { kind: "grunt", x: 3250, patrol: [3180, 3400] },
+        { kind: "spitter", x: 3550 },
+      ],
+      candies: [
+        { x: 260, y: GROUND_Y - 40 },
+        { x: 465, y: TIER1_Y - 32 },
+        { x: 735, y: TIER2_Y - 32 },
+        { x: 1030, y: TIER1_Y - 32 },
+        { x: 1270, y: TIER2_Y - 32 },
+        { x: 1500, y: TIER2_Y - 142 },
+        { x: 1590, y: TIER1_Y - 32 },
+        { x: 1925, y: TIER2_Y - 32 },
+        { x: 2235, y: TIER1_Y - 32 },
+        { x: 2525, y: TIER2_Y - 32 },
+        { x: 2845, y: TIER1_Y - 32 },
+        { x: 3145, y: TIER2_Y - 32 },
+        { x: 3465, y: TIER1_Y - 32 },
+        { x: 3650, y: GROUND_Y - 40 },
+      ],
+      hearts: [{ x: 1770, y: TIER2_Y - 160 }],
+      artifact: { x: 3145, y: TIER2_Y - 60 },
+    },
+    {
+      name: "1-5 The Forest Captain",
+      width: 2600,
       platforms: [
         { x: 380, y: TIER1_Y, w: 160 },
         { x: 700, y: TIER1_Y, w: 160 },
+        { x: 1020, y: TIER2_Y, w: 150 },
       ],
       enemies: [
         { kind: "grunt", x: 500, patrol: [440, 620] },
         { kind: "drone", x: 900, patrol: [850, 1050] },
+        { kind: "spitter", x: 1150 },
       ],
       candies: [
         { x: 240, y: GROUND_Y - 40 },
         { x: 460, y: TIER1_Y - 32 },
         { x: 780, y: TIER1_Y - 32 },
-        { x: 1100, y: GROUND_Y - 40 },
-        { x: 1250, y: GROUND_Y - 40 },
+        { x: 1100, y: TIER2_Y - 32 },
         { x: 1400, y: GROUND_Y - 40 },
+        { x: 1550, y: GROUND_Y - 40 },
+        { x: 1700, y: GROUND_Y - 40 },
       ],
-      boss: { patrol: [1550, 1950] },
+      boss: { patrol: [1900, 2350] },
+      artifact: { x: 1100, y: TIER2_Y - 60 },
     },
   ];
 
@@ -466,9 +564,11 @@
     score,
     lastTime;
   // Run-wide progress (survives level loads within one run, reset by startGame)
-  let artifactsTaken = [false, false, false, false];
+  let artifactsTaken = LEVELS.map(() => false);
   let artifactsAssembled = false;
+  let puzzle = null; // active assembly minigame, see updatePuzzle()
   const input = { left: false, right: false, down: false };
+  let moveAxis = 0; // analog left/right from the touch slide track, -1..1
   const DIALOGUE_DURATION = 2.4;
   const DIALOGUE_COOLDOWN = 3;
   const NEED_ARTIFACT_LINE = "I have to find the artifact thingy first.";
@@ -536,6 +636,8 @@
       gallop: 0,
       hp: prevHp > 0 ? prevHp : PLAYER_MAX_HP,
       hurtTimer: 0,
+      shield: player ? player.shield || 0 : 0,
+      shieldFlash: 0,
       hornCharge: Math.min(HORN_CHARGE_MAX, prevCharge || 0),
       doubleJumped: false,
       crouching: false,
@@ -583,6 +685,7 @@
     dialogueTimer = 0;
     dialogueCooldown = 0;
     intro = null;
+    puzzle = null;
     cameraX = 0;
     elapsed = 0;
   }
@@ -594,6 +697,7 @@
       if (intro.t > 0.6) intro = null;
       return;
     }
+    if (puzzle) return; // sliding puzzle is tap/click-driven, jump does nothing
     if (player.grounded) {
       player.vy = JUMP_VELOCITY;
       player.grounded = false;
@@ -615,7 +719,7 @@
   // SHOT_COST candy, flies in the facing direction, purifies what it hits.
   // Crouching lowers the bolt so it can hit low/ground-hugging targets.
   function tryBlast() {
-    if (state !== "playing" || intro) return;
+    if (state !== "playing" || intro || puzzle) return;
     if (player.hornCharge < SHOT_COST) {
       beep(220, 0.15, "triangle", 0.04);
       return;
@@ -695,6 +799,7 @@
     touchControls.classList.add("hidden");
     input.left = false;
     input.right = false;
+    trackRelease();
     const finalScore = Math.floor(score);
     const best = Math.max(finalScore, getHighscore());
     setHighscore(best);
@@ -706,6 +811,18 @@
   // Troll is knocked back and briefly invulnerable. At 0 hp the run ends.
   function damagePlayer(amount, sourceX) {
     if (player.hurtTimer > 0) return;
+    if (artifactsAssembled && player.shield > 0) {
+      // The assembled artifacts' energy shield soaks the hit entirely —
+      // it drains and recharges like the horn's magical energy.
+      player.shield = Math.max(0, player.shield - amount);
+      player.shieldFlash = 0.4;
+      player.hurtTimer = 0.8;
+      player.vx = (player.x + player.w / 2 < sourceX ? -1 : 1) * 240;
+      player.vy = Math.min(player.vy, -200);
+      player.grounded = false;
+      beep(520, 0.18, "sine", 0.06);
+      return;
+    }
     player.hp -= amount;
     player.hurtTimer = HURT_INVULN;
     player.vx = (player.x + player.w / 2 < sourceX ? -1 : 1) * 320;
@@ -719,10 +836,14 @@
   }
 
   function updatePlayerMovement(dt) {
-    const dir = intro ? 0 : (input.right ? 1 : 0) - (input.left ? 1 : 0);
-    if (dir !== 0) {
-      player.vx += dir * MOVE_ACCEL * dt;
-      player.facing = dir;
+    const kbDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    // moveAxis is the touch slide track (-1..1, analog); keyboard is ±1.
+    const axis = intro || puzzle ? 0 : moveAxis !== 0 ? moveAxis : kbDir;
+    if (axis !== 0) {
+      player.vx += Math.sign(axis) * MOVE_ACCEL * dt;
+      player.facing = Math.sign(axis);
+      const maxV = MOVE_MAX_SPEED * Math.min(1, Math.abs(axis));
+      player.vx = Math.max(-maxV, Math.min(maxV, player.vx));
     } else {
       const decel = MOVE_ACCEL * dt;
       if (Math.abs(player.vx) <= decel) player.vx = 0;
@@ -732,6 +853,43 @@
     player.x += player.vx * dt;
     player.x = Math.max(0, Math.min(levelWidth - player.w, player.x));
     if (player.x === 0 || player.x === levelWidth - player.w) player.vx = 0;
+  }
+
+  // Branch art surface contour, measured via PIL per-column alpha scan
+  // (2026-07-16): fraction-of-height of the walkable top line, sampled evenly
+  // across the *solid* span of the art. The outer ~12% each side is bare twig
+  // tip with nothing to stand on, hence BRANCH_SOLID_*.
+  const BRANCH_PROFILE = [
+    0.35, 0.345, 0.345, 0.36, 0.36, 0.36, 0.36, 0.37, 0.37, 0.37, 0.37, 0.365, 0.365,
+    0.365, 0.365, 0.36, 0.345, 0.35, 0.36,
+  ];
+  const BRANCH_SOLID_MIN = 0.12;
+  const BRANCH_SOLID_MAX = 0.88;
+  const BRANCH_ANCHOR_FRAC = 0.365; // art row aligned to the collision line p.y
+
+  // The walkable surface height at horizontal position cx, following each
+  // platform type's real contour instead of a straight line. Returns null
+  // where there is nothing to stand on (e.g. past a branch's bare tip).
+  function platformSurfaceY(p, cx) {
+    const t = (cx - p.x) / p.w;
+    if (p.bridge) {
+      if (t < 0 || t > 1) return null;
+      return p.y + Math.sin(Math.PI * t) * BRIDGE_SAG;
+    }
+    if (p.groundBump) {
+      if (t < 0 || t > 1) return null;
+      return p.y;
+    }
+    // branch platform
+    if (t < BRANCH_SOLID_MIN || t > BRANCH_SOLID_MAX) return null;
+    if (!(branchTile.complete && branchTile.naturalWidth)) return p.y;
+    const drawH = branchTile.naturalHeight * (p.w / branchTile.naturalWidth);
+    const u =
+      ((t - BRANCH_SOLID_MIN) / (BRANCH_SOLID_MAX - BRANCH_SOLID_MIN)) *
+      (BRANCH_PROFILE.length - 1);
+    const i = Math.min(BRANCH_PROFILE.length - 2, Math.floor(u));
+    const frac = BRANCH_PROFILE[i] + (BRANCH_PROFILE[i + 1] - BRANCH_PROFILE[i]) * (u - i);
+    return p.y + (frac - BRANCH_ANCHOR_FRAC) * drawH + 3;
   }
 
   function updatePlayerVertical(dt) {
@@ -744,15 +902,11 @@
     let landed = false;
     if (wasFalling) {
       for (const p of platforms) {
-        // Land only when Troll's centre is over the platform — the old 12px
-        // overlap let him stand with most of his body past the edge, which
-        // read as floating in mid-air next to the branch.
+        // Land only when Troll's centre is over solid surface — overhanging
+        // the edge read as floating in mid-air.
         const cx = player.x + player.w / 2;
-        const withinX = cx > p.x - 6 && cx < p.x + p.w + 6;
-        // Rope bridges sag toward the middle; the walkable line follows.
-        const t = Math.max(0, Math.min(1, (cx - p.x) / p.w));
-        const surfY = p.bridge ? p.y + Math.sin(Math.PI * t) * BRIDGE_SAG : p.y;
-        if (withinX && prevFootY <= surfY + 6 && footY >= surfY) {
+        const surfY = platformSurfaceY(p, cx);
+        if (surfY !== null && prevFootY <= surfY + 6 && footY >= surfY) {
           player.y = surfY - player.h;
           landed = true;
           break;
@@ -795,6 +949,7 @@
           o.vx = dir * BOSS_CHASE_SPEED; // drawEnemy mirrors the sprite based on vx sign
           o.x = Math.max(60, Math.min(levelWidth - o.w - 60, o.x));
         }
+        o.chasing = o.aggro;
       } else if (o.kind === "drone" && o.swooping > 0) {
         // Mid-swoop: dive toward Troll, ignoring the patrol route.
         o.swooping -= dt;
@@ -804,7 +959,20 @@
         o.y += Math.sign(ty - o.y) * Math.min(Math.abs(ty - o.y), DRONE_CHASE_SPEED * 0.8 * dt);
         if (tx !== o.x) o.vx = Math.sign(tx - o.x) * Math.abs(o.vx || 70);
         if (o.swooping <= 0) o.swoopWait = 4 + Math.random() * 5;
+      } else if (
+        // Ground critters aggro too: when Troll is near and roughly at their
+        // height, they abandon the patrol route and come at him.
+        GROUND_CHASE_SPEED[o.kind] &&
+        !intro &&
+        Math.abs(player.x + player.w / 2 - (o.x + o.w / 2)) < GROUND_AGGRO_RANGE &&
+        player.y + player.h > o.y - 60
+      ) {
+        const dir = Math.sign(player.x + player.w / 2 - (o.x + o.w / 2)) || 1;
+        o.x += dir * GROUND_CHASE_SPEED[o.kind] * dt;
+        o.vx = dir * Math.abs(o.vx || GROUND_CHASE_SPEED[o.kind]);
+        o.chasing = true;
       } else if (o.patrolMin !== undefined) {
+        o.chasing = false;
         o.x += o.vx * dt;
         // Turn at the ends without snapping position — a swoop can carry a
         // drone outside its patrol range, and it should fly back, not teleport.
@@ -860,6 +1028,9 @@
     updatePlayerVertical(dt);
     updateEnemies(dt);
     player.hornCharge = Math.min(HORN_CHARGE_MAX, player.hornCharge + HORN_REGEN_PER_SEC * dt);
+    if (artifactsAssembled)
+      player.shield = Math.min(SHIELD_MAX, player.shield + SHIELD_REGEN_PER_SEC * dt);
+    if (player.shieldFlash > 0) player.shieldFlash -= dt;
     if (player.hurtTimer > 0) player.hurtTimer -= dt;
     player.crouching = player.grounded && input.down;
     if (player.grounded && !player.crouching && Math.abs(player.vx) < 10) {
@@ -999,13 +1170,17 @@
       }
     }
 
-    // Assembly station (level 4): standing at it with the three artifacts
-    // triggers the merge; the portal stays inert until this has happened.
+    // Assembly station (final level): walking up with all five rune pieces
+    // opens the sliding puzzle; solving it plays the merge animation, fuses
+    // the artifact, and grants the energy shield. The portal stays inert
+    // until then.
     if (station && !artifactsAssembled) {
       if (stationTimer >= 0) {
         stationTimer += dt;
         if (stationTimer >= ASSEMBLE_DURATION) {
           artifactsAssembled = true;
+          player.shield = SHIELD_MAX;
+          shieldMeter.classList.remove("hidden");
           for (let i = 0; i < 14; i++) {
             const a = Math.random() * Math.PI * 2;
             sparkles.push({
@@ -1021,12 +1196,28 @@
           }
           beep(1500, 0.4, "sine", 0.08);
         }
+      } else if (puzzle) {
+        if (puzzle.solvedFlash > 0) {
+          // solved: show the whole rune glowing for a beat, then merge
+          puzzle.solvedFlash -= dt;
+          if (puzzle.solvedFlash <= 0) {
+            puzzle = null;
+            stationTimer = 0;
+          }
+        }
       } else if (
         Math.abs(player.x + player.w / 2 - station.x) < 70 &&
         player.grounded
       ) {
-        stationTimer = 0;
-        beep(900, 0.2, "sine", 0.06);
+        if (artifactsTaken.filter(Boolean).length >= PUZZLE_PIECES) {
+          puzzle = makePuzzle();
+          beep(900, 0.2, "sine", 0.06);
+        } else if (dialogueCooldown <= 0) {
+          dialogueMessage = NEED_PIECES_LINE;
+          dialogueTimer = DIALOGUE_DURATION;
+          dialogueCooldown = DIALOGUE_COOLDOWN;
+          beep(220, 0.15, "triangle", 0.04);
+        }
       }
     }
 
@@ -1103,6 +1294,215 @@
       portalActivateTimer = 0;
       portalBeamFired = false;
     }
+  }
+
+  // --- Sliding rune puzzle -------------------------------------------------
+  // 2x3 board, row-major cells; grid[cell] = tile id (tile i belongs at cell
+  // i) or -1 for the empty slot. Shuffled by random backwards moves so it is
+  // always solvable.
+  function puzzleAdjacent(cell) {
+    const col = cell % PUZZLE_COLS;
+    const row = Math.floor(cell / PUZZLE_COLS);
+    const out = [];
+    if (col > 0) out.push(cell - 1);
+    if (col < PUZZLE_COLS - 1) out.push(cell + 1);
+    if (row > 0) out.push(cell - PUZZLE_COLS);
+    if (row < PUZZLE_ROWS - 1) out.push(cell + PUZZLE_COLS);
+    return out;
+  }
+
+  function puzzleSolved(grid) {
+    for (let i = 0; i < grid.length - 1; i++) if (grid[i] !== i) return false;
+    return true;
+  }
+
+  function makePuzzle() {
+    const grid = [0, 1, 2, 3, 4, -1];
+    let empty = 5;
+    let last = -1;
+    for (let i = 0; i < 80 || puzzleSolved(grid); i++) {
+      const opts = puzzleAdjacent(empty).filter((c) => c !== last);
+      const pick = opts[Math.floor(Math.random() * opts.length)];
+      grid[empty] = grid[pick];
+      grid[pick] = -1;
+      last = empty;
+      empty = pick;
+    }
+    return { grid, solvedFlash: 0, moves: 0 };
+  }
+
+  // Board geometry in canvas (960x600) space, shared by drawing and taps.
+  function puzzleBoardRect() {
+    const bw = PUZZLE_COLS * PUZZLE_CELL + (PUZZLE_COLS + 1) * PUZZLE_GAP;
+    const bh = PUZZLE_ROWS * PUZZLE_CELL + (PUZZLE_ROWS + 1) * PUZZLE_GAP;
+    return { x: W / 2 - bw / 2, y: H / 2 - bh / 2 + 14, w: bw, h: bh };
+  }
+
+  function puzzleCellRect(cell) {
+    const b = puzzleBoardRect();
+    const col = cell % PUZZLE_COLS;
+    const row = Math.floor(cell / PUZZLE_COLS);
+    return {
+      x: b.x + PUZZLE_GAP + col * (PUZZLE_CELL + PUZZLE_GAP),
+      y: b.y + PUZZLE_GAP + row * (PUZZLE_CELL + PUZZLE_GAP),
+      w: PUZZLE_CELL,
+      h: PUZZLE_CELL,
+    };
+  }
+
+  // A tap/click on the canvas while the puzzle is open: slide the tapped
+  // tile into the empty slot if they're neighbours.
+  function puzzleTap(clientX, clientY) {
+    if (puzzle.solvedFlash > 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const px = ((clientX - rect.left) / rect.width) * W;
+    const py = ((clientY - rect.top) / rect.height) * H;
+    const emptyCell = puzzle.grid.indexOf(-1);
+    for (let cell = 0; cell < puzzle.grid.length; cell++) {
+      const r = puzzleCellRect(cell);
+      if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) {
+        if (puzzleAdjacent(cell).includes(emptyCell) && puzzle.grid[cell] !== -1) {
+          puzzle.grid[emptyCell] = puzzle.grid[cell];
+          puzzle.grid[cell] = -1;
+          puzzle.moves += 1;
+          beep(700, 0.06, "sine", 0.05);
+          if (puzzleSolved(puzzle.grid)) {
+            puzzle.solvedFlash = 1.1;
+            beep(1400, 0.35, "sine", 0.08);
+          }
+        } else {
+          beep(240, 0.06, "triangle", 0.03);
+        }
+        return;
+      }
+    }
+  }
+
+  // The Eihwaz rune (resilience), calligraphic: tapered strokes with barbed
+  // flicks, drawn once onto an offscreen canvas that the tiles slice.
+  // Art hook: drop assets/rune-eihwaz.png (transparent, portrait) to replace.
+  const runeImg = loadImg("assets/rune-eihwaz.png");
+  let runeCanvas = null;
+  function getRuneCanvas() {
+    if (runeCanvas) return runeCanvas;
+    const rw = PUZZLE_COLS * PUZZLE_CELL;
+    const rh = PUZZLE_ROWS * PUZZLE_CELL;
+    runeCanvas = document.createElement("canvas");
+    runeCanvas.width = rw;
+    runeCanvas.height = rh;
+    const g = runeCanvas.getContext("2d");
+    // parchment-stone backing so every tile has visible texture
+    const bg = g.createLinearGradient(0, 0, rw, rh);
+    bg.addColorStop(0, "#4d5b74");
+    bg.addColorStop(1, "#39465c");
+    g.fillStyle = bg;
+    g.fillRect(0, 0, rw, rh);
+    if (runeImg.complete && runeImg.naturalWidth) {
+      const scale = Math.min((rw * 0.82) / runeImg.naturalWidth, (rh * 0.82) / runeImg.naturalHeight);
+      const iw = runeImg.naturalWidth * scale;
+      const ih = runeImg.naturalHeight * scale;
+      g.drawImage(runeImg, (rw - iw) / 2, (rh - ih) / 2, iw, ih);
+      return runeCanvas;
+    }
+    // Procedural calligraphic Eihwaz inside a runic ring. The ring passes
+    // through all six tiles so no puzzle piece is ever a blank slab; the
+    // rune itself is bold tapered polygons matched to the reference sketch —
+    // slanted main stroke, top arm flicking right with a barb, bottom arm
+    // mirrored down-left.
+    g.lineJoin = "round";
+    // runic ring
+    g.beginPath();
+    g.ellipse(rw / 2, rh / 2, rw * 0.46, rh * 0.455, 0, 0, Math.PI * 2);
+    g.lineWidth = 16;
+    g.strokeStyle = "#131d31";
+    g.stroke();
+    g.beginPath();
+    g.ellipse(rw / 2, rh / 2, rw * 0.46, rh * 0.455, 0, 0, Math.PI * 2);
+    g.lineWidth = 9;
+    g.strokeStyle = "#9a7840";
+    g.stroke();
+    const P = (fx, fy) => [fx * rw, fy * rh];
+    const polys = [
+      // main stroke — a wide slanted band through the middle tiles
+      [P(0.5, 0.1), P(0.68, 0.15), P(0.5, 0.9), P(0.32, 0.85)],
+      // top arm reaching right with an upward barbed tip
+      [P(0.5, 0.08), P(0.88, 0.21), P(0.93, 0.13), P(0.97, 0.3), P(0.82, 0.32), P(0.53, 0.21)],
+      // bottom arm reaching left with a downward barb (point-mirrored)
+      [P(0.5, 0.92), P(0.12, 0.79), P(0.07, 0.87), P(0.03, 0.7), P(0.18, 0.68), P(0.47, 0.79)],
+    ];
+    for (const poly of polys) {
+      g.beginPath();
+      g.moveTo(poly[0][0], poly[0][1]);
+      for (let i = 1; i < poly.length; i++) g.lineTo(poly[i][0], poly[i][1]);
+      g.closePath();
+      g.fillStyle = "#dcc48f";
+      g.strokeStyle = "#131d31";
+      g.lineWidth = 5;
+      g.stroke();
+      g.fill();
+    }
+    return runeCanvas;
+  }
+
+  function drawPuzzle() {
+    const rune = getRuneCanvas();
+    const b = puzzleBoardRect();
+    ctx.save();
+    // dim the world behind
+    ctx.fillStyle = "rgba(19, 29, 49, 0.6)";
+    ctx.fillRect(0, 0, W, H);
+    // title + instructions
+    ctx.fillStyle = "#f2e8cf";
+    ctx.textAlign = "center";
+    ctx.font = "bold 34px Segoe UI, sans-serif";
+    ctx.fillText(PUZZLE_TITLE, W / 2, b.y - 48);
+    ctx.font = "22px Segoe UI, sans-serif";
+    ctx.fillText(PUZZLE_LINE, W / 2, b.y - 16);
+    // board backing
+    ctx.fillStyle = "#203252";
+    ctx.strokeStyle = "#dcc48f";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(b.x - 6, b.y - 6, b.w + 12, b.h + 12, 14);
+    ctx.fill();
+    ctx.stroke();
+    const solvedGlow = puzzle.solvedFlash > 0;
+    for (let cell = 0; cell < puzzle.grid.length; cell++) {
+      const tile = solvedGlow ? cell : puzzle.grid[cell]; // show it perfect while flashing
+      const r = puzzleCellRect(cell);
+      if (tile === -1 && !solvedGlow) {
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        continue;
+      }
+      if (tile === -1) continue;
+      const srcCol = tile % PUZZLE_COLS;
+      const srcRow = Math.floor(tile / PUZZLE_COLS);
+      ctx.drawImage(
+        rune,
+        srcCol * PUZZLE_CELL,
+        srcRow * PUZZLE_CELL,
+        PUZZLE_CELL,
+        PUZZLE_CELL,
+        r.x,
+        r.y,
+        r.w,
+        r.h
+      );
+      ctx.strokeStyle = solvedGlow ? "#fff6d8" : "#131d31";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+    }
+    if (solvedGlow) {
+      const pulse = 0.5 + Math.sin(elapsed * 12) * 0.3;
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = "#fff6d8";
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.roundRect(b.x - 10, b.y - 10, b.w + 20, b.h + 20, 16);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   // --- Rendering -----------------------------------------------------------
@@ -1278,7 +1678,17 @@
   }
 
   function drawEnemy(o) {
-    const sprite = o.purifying ? purifiedSprites[o.kind] || enemySprites[o.kind] : enemySprites[o.kind];
+    let sprite = o.purifying ? purifiedSprites[o.kind] || enemySprites[o.kind] : enemySprites[o.kind];
+    // Brute action poses: the boss throws his arms up mid-roar; any brute
+    // reaches arms-forward while actively chasing Troll.
+    if (o.kind === "brute" && !o.purifying) {
+      const roaring = o.isBoss && elapsed % 4 < 0.3;
+      if (roaring && bruteArmsUpImg.complete && bruteArmsUpImg.naturalWidth) {
+        sprite = bruteArmsUpImg;
+      } else if (o.chasing && bruteArmsForwardImg.complete && bruteArmsForwardImg.naturalWidth) {
+        sprite = bruteArmsForwardImg;
+      }
+    }
     if (sprite) {
       const drawH = o.h * 1.12;
       const drawW = drawH * (sprite.naturalWidth / sprite.naturalHeight);
@@ -1494,23 +1904,49 @@
 
   // Sparkles flying in to beam the energy Troll won from the boss into the
   // portal — plays once, before the portal itself flips from dark to active.
+  // Sparkles waits beside the portal for the whole level (no more flying in
+  // at the last second) — the activation beam fires from where she sits.
+  const UNICORN_SEAT_OFFSET_X = -115;
+  const UNICORN_SEAT_SIZE = 95;
+
+  function drawSeatedUnicorn() {
+    if (!(unicornSitImg.complete && unicornSitImg.naturalWidth)) return;
+    const bob = Math.sin(elapsed * 1.8) * 2;
+    ctx.drawImage(
+      unicornSitImg,
+      portal.x + UNICORN_SEAT_OFFSET_X,
+      GROUND_Y - UNICORN_SEAT_SIZE + bob,
+      UNICORN_SEAT_SIZE,
+      UNICORN_SEAT_SIZE
+    );
+  }
+
   function drawPortalBeam() {
     const t = Math.min(1, portalActivateTimer / PORTAL_BEAM_HIT_AT);
-    const startX = portal.x - 130;
-    const startY = portal.y - 90;
-    const ux = startX + (portal.x - startX) * Math.min(1, t * 1.3);
-    const uy = startY + (portal.y - 20 - startY) * Math.min(1, t * 1.3);
-    if (unicornSitImg.complete && unicornSitImg.naturalWidth) {
-      ctx.drawImage(unicornSitImg, ux - 45, uy - 45, 90, 90);
-    }
-    if (t >= 0.7 && !portalBeamFired) {
+    // her horn sits near the top-centre of the seated sprite
+    const ux = portal.x + UNICORN_SEAT_OFFSET_X + UNICORN_SEAT_SIZE * 0.55;
+    const uy = GROUND_Y - UNICORN_SEAT_SIZE * 0.92;
+    if (t < 0.7) {
+      // charge-up glow at the horn before the beam fires
+      const glow = t / 0.7;
+      ctx.save();
+      ctx.globalAlpha = 0.6 * glow;
+      const grad = ctx.createRadialGradient(ux, uy, 2, ux, uy, 24);
+      grad.addColorStop(0, "#fff6d8");
+      grad.addColorStop(1, "rgba(255, 246, 216, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(ux, uy, 24, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (!portalBeamFired) {
       const pulse = 0.6 + Math.sin(elapsed * 20) * 0.4;
       ctx.save();
       ctx.globalAlpha = 0.7 * pulse;
       ctx.strokeStyle = "#fff6d8";
       ctx.lineWidth = 5;
       ctx.beginPath();
-      ctx.moveTo(ux, uy - 20);
+      ctx.moveTo(ux, uy);
       ctx.lineTo(portal.x, portal.y);
       ctx.stroke();
       ctx.restore();
@@ -1556,16 +1992,19 @@
   }
 
   // Word-wrapped speech bubble with a tail pointing down at (cx, bottomY).
+  // Text is deliberately large: the 960px canvas is squeezed onto phone
+  // screens, so canvas-space fonts need to be ~2x what desktop would use.
   function drawBubble(cx, bottomY, text, maxW, alpha) {
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-    ctx.font = "16px Segoe UI, sans-serif";
+    ctx.font = "32px Segoe UI, sans-serif";
+    const wrapW = maxW * 1.9; // wrap width tracks the doubled font
     const words = text.split(" ");
     const lines = [];
     let line = "";
     for (const word of words) {
       const test = line ? line + " " + word : word;
-      if (ctx.measureText(test).width > maxW && line) {
+      if (ctx.measureText(test).width > wrapW && line) {
         lines.push(line);
         line = word;
       } else {
@@ -1573,9 +2012,9 @@
       }
     }
     if (line) lines.push(line);
-    const lineH = 21;
-    const padX = 14,
-      padY = 10;
+    const lineH = 42;
+    const padX = 20,
+      padY = 14;
     let boxW = 0;
     for (const l of lines) boxW = Math.max(boxW, ctx.measureText(l).width);
     boxW += padX * 2;
@@ -1720,10 +2159,16 @@
     const kAlpha = kFadeIn * kFadeOut;
 
     if (kAlpha > 0) {
+      const hasKingArt = kingImg.complete && kingImg.naturalWidth;
+      // While the real art is still downloading, show only the swirl (the
+      // portal "forming") — never flash the blocky placeholder first. The
+      // placeholder is reserved for a permanent load failure.
+      const kingStillLoading = !hasKingArt && !kingImg.permanentlyFailed;
       ctx.save();
-      ctx.globalAlpha = kAlpha * 0.85;
-      // mystical swirl behind him (reuses the portal swirl art)
-      if (portalSwirlImg.complete && portalSwirlImg.naturalWidth) {
+      // Mystical swirl behind the procedural placeholder only — Jonathan's
+      // King Angus art carries its own baked-in portal glow.
+      if (!hasKingArt && portalSwirlImg.complete && portalSwirlImg.naturalWidth) {
+        ctx.globalAlpha = kAlpha * 0.85;
         ctx.save();
         ctx.translate(kx, GROUND_Y - 80);
         ctx.rotate(elapsed * 1.2);
@@ -1732,10 +2177,12 @@
         ctx.restore();
       }
       ctx.globalAlpha = kAlpha;
-      if (kingImg.complete && kingImg.naturalWidth) {
-        const h = 150;
+      if (hasKingArt) {
+        const h = 210;
         const w = h * (kingImg.naturalWidth / kingImg.naturalHeight);
         ctx.drawImage(kingImg, kx - w / 2, GROUND_Y - h, w, h);
+      } else if (kingStillLoading) {
+        // just the swirl until the real art arrives
       } else {
         // Procedural placeholder king: robe, beard, crown. Replaced
         // automatically once assets/king-angus.png exists.
@@ -1783,7 +2230,7 @@
 
     if (t > INTRO_KING_IN && t < INTRO_KING_OUT) {
       const a = Math.min(1, (t - INTRO_KING_IN) / 0.4) * kFadeOut;
-      drawBubble(kx, GROUND_Y - 150, KING_LINE, 300, a);
+      drawBubble(kx, GROUND_Y - 215, KING_LINE, 300, a);
     } else if (t > INTRO_KING_OUT + 0.4) {
       const a = Math.min(1, (t - INTRO_KING_OUT - 0.4) / 0.4, (INTRO_END - t) / 0.4);
       drawBubble(player.x + player.w / 2, player.y - 24, TROLL_INTRO_LINE, 300, a);
@@ -1793,9 +2240,9 @@
     ctx.save();
     ctx.globalAlpha = 0.55;
     ctx.fillStyle = "#131d31";
-    ctx.font = "13px Segoe UI, sans-serif";
+    ctx.font = "22px Segoe UI, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("(jump to skip)", cameraX + W / 2, H - 14);
+    ctx.fillText("(jump to skip)", cameraX + W / 2, H - 16);
     ctx.restore();
   }
 
@@ -1956,6 +2403,20 @@
       ctx.drawImage(idleSprite, -w / 2, -h, w, h);
     }
 
+    // Shield impact: a blue energy bubble flashes around Troll when the
+    // artifact shield soaks a hit.
+    if (player.shieldFlash > 0) {
+      const sa = Math.min(1, player.shieldFlash / 0.4);
+      const grad = ctx.createRadialGradient(0, -h / 2, h * 0.3, 0, -h / 2, h * 0.75);
+      grad.addColorStop(0, "rgba(125, 183, 238, 0)");
+      grad.addColorStop(0.75, `rgba(125, 183, 238, ${0.45 * sa})`);
+      grad.addColorStop(1, "rgba(125, 183, 238, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, -h / 2, h * 0.75, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     if (player.hornCharge >= HORN_CHARGE_MAX) {
       const pulse = 0.6 + Math.sin(elapsed * 10) * 0.3;
       const gy = -h * 0.92;
@@ -1982,6 +2443,7 @@
     platforms.forEach(drawPlatform);
     if (portal) {
       drawPortal(portal);
+      drawSeatedUnicorn();
       if (portalActivating) drawPortalBeam();
     } else if (exitPoint) {
       drawTreeExit(exitPoint);
@@ -2000,6 +2462,7 @@
     if (dialogueTimer > 0) drawDialogue();
     if (intro) drawIntro();
     ctx.restore();
+    if (puzzle) drawPuzzle(); // screen-space overlay, unaffected by camera
   }
 
   function drawFinaleScene() {
@@ -2051,6 +2514,10 @@
       const pct = (player.hornCharge / HORN_CHARGE_MAX) * 100;
       hornFill.style.height = pct + "%";
       healthFill.style.width = (player.hp / PLAYER_MAX_HP) * 100 + "%";
+      if (artifactsAssembled) {
+        shieldMeter.classList.remove("hidden");
+        shieldFill.style.width = (player.shield / SHIELD_MAX) * 100 + "%";
+      }
       const canShoot = player.hornCharge >= SHOT_COST;
       hornMeter.classList.toggle("full", canShoot);
       blastBtn.classList.toggle("ready", canShoot);
@@ -2088,8 +2555,9 @@
     enterMobileFullscreen();
     player = null;
     score = 0;
-    artifactsTaken = [false, false, false, false];
+    artifactsTaken = LEVELS.map(() => false);
     artifactsAssembled = false;
+    shieldMeter.classList.add("hidden");
     loadLevel(0);
     intro = { t: 0 };
     state = "playing";
@@ -2115,6 +2583,7 @@
     touchControls.classList.add("hidden");
     input.left = false;
     input.right = false;
+    trackRelease();
     const finalScore = Math.floor(score);
     const best = Math.max(finalScore, getHighscore());
     setHighscore(best);
@@ -2179,8 +2648,14 @@
 
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
-    // Touch taps on the play area do nothing — phones have dedicated
-    // buttons, and stray thumbs were causing accidental jumps.
+    // The sliding puzzle is the one place canvas taps mean something —
+    // touch and mouse both slide tiles there.
+    if (puzzle && state === "playing") {
+      puzzleTap(e.clientX, e.clientY);
+      return;
+    }
+    // Otherwise touch taps on the play area do nothing — phones have
+    // dedicated buttons, and stray thumbs were causing accidental jumps.
     if (e.pointerType === "touch") return;
     jump();
   });
@@ -2198,19 +2673,39 @@
     );
   }
   bindHold(
-    leftBtn,
-    () => (input.left = true),
-    () => (input.left = false)
-  );
-  bindHold(
-    rightBtn,
-    () => (input.right = true),
-    () => (input.right = false)
-  );
-  bindHold(
     crouchBtn,
     () => (input.down = true),
     () => (input.down = false)
+  );
+
+  // Slide track: touch anywhere on it and slide left/right; distance from
+  // centre is analog speed. Pointer capture keeps it responsive even when
+  // the thumb wanders off the track mid-slide.
+  function trackUpdate(e) {
+    const r = moveTrack.getBoundingClientRect();
+    let v = ((e.clientX - r.left) / r.width) * 2 - 1;
+    v = Math.max(-1, Math.min(1, v));
+    moveAxis = Math.abs(v) < 0.12 ? 0 : v; // small dead zone in the middle
+    const maxShift = r.width / 2 - 30;
+    moveKnob.style.transform = `translateX(${v * maxShift}px)`;
+  }
+  function trackRelease() {
+    moveAxis = 0;
+    moveKnob.style.transform = "";
+  }
+  moveTrack.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    moveTrack.setPointerCapture(e.pointerId);
+    trackUpdate(e);
+  });
+  moveTrack.addEventListener("pointermove", (e) => {
+    if (moveTrack.hasPointerCapture && moveTrack.hasPointerCapture(e.pointerId)) trackUpdate(e);
+  });
+  ["pointerup", "pointercancel"].forEach((evt) =>
+    moveTrack.addEventListener(evt, (e) => {
+      e.preventDefault();
+      trackRelease();
+    })
   );
   jumpBtn.addEventListener("pointerdown", (e) => {
     e.preventDefault();
@@ -2251,6 +2746,7 @@
     input.left = false;
     input.right = false;
     input.down = false;
+    trackRelease();
   });
 
   score = 0;
