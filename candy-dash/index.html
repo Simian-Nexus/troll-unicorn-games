@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Troll & Unicorn: Candy Dash</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="game-wrap">
+    <canvas id="game" width="960" height="600"></canvas>
+
+    <div id="overlay" class="screen">
+      <img class="logo" src="assets/logo.png" alt="Troll & Unicorn" />
+      <h1>Candy Dash</h1>
+      <div class="portrait-row">
+        <img class="portrait" src="assets/troll-portrait.jpg" alt="Troll" />
+        <p class="quote" id="menu-quote">"Statistically, most of you will hit the first obstacle."</p>
+      </div>
+      <p class="howto">
+        <b>Space</b> / tap to jump — press again mid-air to double jump if you have 4+ candy
+        charged. <b>Arrow keys</b> or ◀ ▶ to explore (nothing auto-scrolls); hold <b>Down</b>/S to
+        crouch and aim low. Collect Matrix-energy candies to charge Sparkles' horn (3 per shot,
+        and it also trickles back slowly on its own — wait around if you run dry); press
+        <b>X</b> or ✦ to fire a bolt and purify a corrupted creature back to its true form.
+        Each level hides an ancient artifact on a high platform — find it before the hollow
+        tree at the end will let you through. Level 4 ends at a real portal instead: beware
+        the Forest Captain, who hunts you down rather than just pacing — beating him hands
+        you all the energy Sparkles needs to beam the portal open.
+      </p>
+      <button id="start-btn" class="btn">Play</button>
+      <p class="highscore" id="menu-highscore"></p>
+    </div>
+
+    <div id="gameover" class="screen hidden">
+      <img class="portrait small" id="over-portrait" src="assets/unicorn-vibes.png" alt="" />
+      <p class="quote" id="over-quote"></p>
+      <h2 id="score-line"></h2>
+      <button id="retry-btn" class="btn">Retry Level</button>
+    </div>
+
+    <div id="finale" class="screen hidden">
+      <img class="portrait" src="assets/troll-portrait.jpg" alt="Troll" />
+      <h2>The Whispering Forest is healed!</h2>
+      <p class="quote">"Sparkles will hold the portal steady from here. Well fought, Thpooth."</p>
+      <button id="finale-btn" class="btn">Play Again</button>
+    </div>
+
+    <div id="hud" class="hidden">
+      <span id="hud-level"></span>
+      <span id="hud-score">0</span>
+      <div id="hud-artifact" title="Artifact (find it to leave the level)"></div>
+      <div id="horn-meter" aria-label="Horn charge">
+        <div id="horn-fill"></div>
+      </div>
+    </div>
+
+    <div id="touch-controls" class="hidden">
+      <button id="left-btn" class="ctrl-btn" aria-label="Move left">◀</button>
+      <button id="jump-btn" class="ctrl-btn ctrl-jump" aria-label="Jump">⤒</button>
+      <button id="blast-btn" class="ctrl-btn ctrl-blast" aria-label="Horn blast">✦</button>
+      <button id="right-btn" class="ctrl-btn" aria-label="Move right">▶</button>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

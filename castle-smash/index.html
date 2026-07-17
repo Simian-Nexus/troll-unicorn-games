@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Troll &amp; Unicorn: Castle Smash — Prototype</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game-wrap">
+  <div id="hud">
+    <span id="hud-score">Score: 0</span>
+    <span id="hud-shots">Shots: 3</span>
+    <span id="hud-crystals">Crystals: 0</span>
+    <button id="btn-reset" type="button">Rebuild &amp; Retry</button>
+  </div>
+  <div id="canvas-holder"></div>
+  <div id="overlay" class="hidden">
+    <div id="overlay-card">
+      <h1 id="overlay-title">Castle Smashed!</h1>
+      <p id="overlay-body"></p>
+      <button id="btn-again" type="button">Play Again</button>
+    </div>
+  </div>
+  <p id="hint">Drag Unicorn's projectile back and release to fire. Click mid-flight for a sparkle burst. Smash all the crystals!</p>
+</div>
+<script src="vendor/matter.min.js"></script>
+<script src="src/main.js"></script>
+</body>
+</html>

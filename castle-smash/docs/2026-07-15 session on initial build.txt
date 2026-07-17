@@ -1,0 +1,10 @@
+What I built
+The idea note is now a real project: Castle Smash (working title) at 03_Games/TAU_HTML5_Games/castle-smash/, alongside candy-dash per the existing games convention.
+
+Design docs — GAME_DESIGN.md captures the full concept: same-components/time-limit build phase, async smash-phase PvP against stored opponent builds, the Troll-builds/Unicorn-smashes backstory, and the monetisation + levelling brainstorm the note asked for (cosmetics-first, capped "within reason" assists disabled in top leagues, leagues as the anti-pay-to-win valve, and no loot boxes given the young audience). ARCHITECTURE.md defines the level JSON format and the client↔server REST contract.
+
+Playable prototype — vanilla JS + vendored Matter.js (no build step, self-contained, so the same bundle works on the website, YouTube Playables, and a webview wrapper). Drag-to-fire slingshot, destructible wood/stone/crystal castle with HP-based impact damage, 3 shots, a mid-flight "sparkle burst" ability, scoring and win/lose overlay. Syntax-checked with Node; it needs a real browser playtest — serve the folder and open it (python -m http.server 8092).
+
+Server side — a new game-agnostic WordPress plugin tu-games scaffolded in the site repo at wp-content/plugins/tu-games/: guest player tokens (hashed, zero PII — kid-safe by design), weekly-round level storage, async opponent matchmaking, match reporting with plausibility score caps, and a leaderboard, all under /wp-json/tu-games/v1/. Everything is keyed by a game slug so candy-dash and future games can share it. All four PHP files pass php -l. It's designed around Bluehost's constraints — plain PHP/MySQL, no websockets, FTP-deployable. It is uncommitted, not yet activated, and flagged not for production until rate limiting is added. Your two pre-existing uncommitted theme changes (single.php, style.css) were not touched.
+
+Records updated — Brain 30_ACTIVE_WORK.md and 40_SESSION_LOG.md, the knowledge-vault note, and the ideas-inbox note now all point at the game's STATUS.md as the authoritative status.
