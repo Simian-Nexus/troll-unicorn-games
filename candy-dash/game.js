@@ -608,6 +608,7 @@
   let artifactsAssembled = false;
   let puzzle = null; // active assembly minigame
   let piecesViewTimer = 0; // rune-pieces popup (tap the HUD artifact icon)
+  let unicornEmerge = 0; // seconds since the boss fell — drives her slide-out
   const input = { left: false, right: false, down: false };
   let moveAxis = 0; // analog left/right from the touch slide track, -1..1
   const DIALOGUE_DURATION = 2.4;
@@ -734,6 +735,7 @@
     dialogueCooldown = 0;
     intro = null;
     puzzle = null;
+    unicornEmerge = 0;
     cameraX = 0;
     elapsed = 0;
   }
@@ -1335,6 +1337,7 @@
 
     if (dialogueTimer > 0) dialogueTimer -= dt;
     if (dialogueCooldown > 0) dialogueCooldown -= dt;
+    if (portal && bossDefeated) unicornEmerge += dt;
 
     const currentLevel = LEVELS[currentLevelIndex];
     if (currentLevel.boss) {
@@ -2117,21 +2120,33 @@
 
   // Sparkles flying in to beam the energy Troll won from the boss into the
   // portal — plays once, before the portal itself flips from dark to active.
-  // Sparkles waits beside the portal for the whole level (no more flying in
-  // at the last second) — the activation beam fires from where she sits.
+  // Sparkles hides behind the guarded portal, then slides out to her spot
+  // beside it once the Saurosapien falls — the beam fires from where she
+  // sits. UNICORN_HIDE_OFFSET_X keeps most of her occluded by the portal.
   const UNICORN_SEAT_OFFSET_X = -115;
+  const UNICORN_HIDE_OFFSET_X = -18;
   const UNICORN_SEAT_SIZE = 95;
+  const UNICORN_EMERGE_TIME = 1.2;
+  const UNICORN_CALL_LINE = "Quick, Thpooth — bring me that energy!";
 
   function drawSeatedUnicorn() {
     if (!(unicornSitImg.complete && unicornSitImg.naturalWidth)) return;
+    const t = Math.min(1, unicornEmerge / UNICORN_EMERGE_TIME);
+    const ease = t * t * (3 - 2 * t);
+    const x =
+      portal.x + UNICORN_HIDE_OFFSET_X + (UNICORN_SEAT_OFFSET_X - UNICORN_HIDE_OFFSET_X) * ease;
     const bob = Math.sin(elapsed * 1.8) * 2;
-    ctx.drawImage(
-      unicornSitImg,
-      portal.x + UNICORN_SEAT_OFFSET_X,
-      GROUND_Y - UNICORN_SEAT_SIZE + bob,
-      UNICORN_SEAT_SIZE,
-      UNICORN_SEAT_SIZE
-    );
+    ctx.drawImage(unicornSitImg, x, GROUND_Y - UNICORN_SEAT_SIZE + bob, UNICORN_SEAT_SIZE, UNICORN_SEAT_SIZE);
+    // once she's out, she calls Troll over (unless the beam is already going)
+    if (
+      bossDefeated &&
+      !portalActivating &&
+      unicornEmerge > UNICORN_EMERGE_TIME &&
+      unicornEmerge < UNICORN_EMERGE_TIME + 3.5
+    ) {
+      const a = Math.min(1, unicornEmerge - UNICORN_EMERGE_TIME);
+      drawBubble(x + UNICORN_SEAT_SIZE / 2, GROUND_Y - UNICORN_SEAT_SIZE - 6, UNICORN_CALL_LINE, 260, a);
+    }
   }
 
   function drawPortalBeam() {
@@ -2655,8 +2670,12 @@
     drawGroundBand();
     platforms.forEach(drawPlatform);
     if (portal) {
+      // Sparkles hides BEHIND the portal while the Saurosapien guards it
+      // (drawn first so the portal occludes her, just an ear poking out);
+      // once he falls she slides out to her spot beside it.
+      if (!bossDefeated) drawSeatedUnicorn();
       drawPortal(portal);
-      drawSeatedUnicorn();
+      if (bossDefeated) drawSeatedUnicorn();
       if (portalActivating) drawPortalBeam();
     } else if (exitPoint) {
       drawTreeExit(exitPoint);
