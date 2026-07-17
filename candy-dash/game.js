@@ -71,10 +71,15 @@
   // Player is Troll (canon: episode 7.5 — Troll explores the corrupted realms
   // while Sparkles's horn fires the candy-charged bolts). Frames are 256x256
   // PNGs copied from the Unity project's run cycle.
+  // Bump when any art asset changes so phones fetch the new files instead of
+  // serving stale cached copies (style.css/game.js have their own ?v=).
+  const ASSET_VERSION = 2;
+  const av = (p) => p + "?av=" + ASSET_VERSION;
+
   const idleSprite = new Image();
-  idleSprite.src = "assets/troll/troll-idle.png";
+  idleSprite.src = av("assets/troll/troll-idle.png");
   const unicornSitImg = new Image();
-  unicornSitImg.src = "assets/unicorn-sit.png";
+  unicornSitImg.src = av("assets/unicorn-sit.png");
 
   const RUN_FRAME_PATHS = [
     "assets/troll/troll-run-1.png",
@@ -91,13 +96,13 @@
   RUN_FRAME_PATHS.forEach((p, i) => {
     const img = new Image();
     img.onload = () => (runFrameSlots[i] = img);
-    img.src = p;
+    img.src = av(p);
   });
   let jumpFrame = null;
   {
     const img = new Image();
     img.onload = () => (jumpFrame = img);
-    img.src = JUMP_FRAME_PATH;
+    img.src = av(JUMP_FRAME_PATH);
   }
 
   const CROUCH_FRAME_PATHS = [
@@ -112,7 +117,7 @@
   CROUCH_FRAME_PATHS.forEach((p, i) => {
     const img = new Image();
     img.onload = () => (crouchFrameSlots[i] = img);
-    img.src = p;
+    img.src = av(p);
   });
 
   // Idle fidget: "look left" (16) -> "scratch bum" (7) -> a few frames of a
@@ -123,7 +128,7 @@
   for (let i = 1; i <= FIDGET_FRAME_COUNT; i++) {
     const img = new Image();
     img.onload = () => (fidgetFrameSlots[i - 1] = img);
-    img.src = `assets/troll/troll-fidget-${i}.png`;
+    img.src = av(`assets/troll/troll-fidget-${i}.png`);
   }
 
   // Enemy art hook: drop a transparent PNG at assets/enemies/<kind>.png
@@ -136,7 +141,7 @@
   ENEMY_KINDS.forEach((kind) => {
     const img = new Image();
     img.onload = () => (enemySprites[kind] = img);
-    img.src = `assets/enemies/${kind}.png`;
+    img.src = av(`assets/enemies/${kind}.png`);
   });
   // Purified counterpart shown while a hit enemy hops away (see purify()).
   // grunt.png is currently a placeholder (reuses the purified rabbit — no
@@ -145,12 +150,13 @@
   ENEMY_KINDS.forEach((kind) => {
     const img = new Image();
     img.onload = () => (purifiedSprites[kind] = img);
-    img.src = `assets/enemies/purified/${kind}.png`;
+    img.src = av(`assets/enemies/purified/${kind}.png`);
   });
 
   // Whispering Forest parallax + terrain. Downscaled from the Unity project's
   // production art (see tools/prep notes in docs/CANDY_DASH_2_PLAN.md).
   function loadImg(src) {
+    src = av(src);
     const img = new Image();
     // A busy or flaky connection (or dev server) can drop an image request;
     // retry a couple of times so a sprite doesn't stay missing all session.
