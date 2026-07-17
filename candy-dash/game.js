@@ -73,7 +73,7 @@
   // PNGs copied from the Unity project's run cycle.
   // Bump when any art asset changes so phones fetch the new files instead of
   // serving stale cached copies (style.css/game.js have their own ?v=).
-  const ASSET_VERSION = 2;
+  const ASSET_VERSION = 3;
   const av = (p) => p + "?av=" + ASSET_VERSION;
 
   const idleSprite = new Image();
