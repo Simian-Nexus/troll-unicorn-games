@@ -1,4 +1,14 @@
 (() => {
+  // Bump this with every meaningful change and pair it with the index.html
+  // game.js?v= cache-buster bump — a stale cache showing an old build with
+  // no visible sign of it is exactly what caused the "no music" / "World 1
+  // critters not despawning" reports on 2026-07-18 (the game.js?v= number
+  // hadn't been bumped despite the file changing). Rendered by the
+  // #build-version element (see index.html/style.css) in every screen state.
+  const BUILD_VERSION = "2026-07-18.13";
+  const buildVersionEl = document.getElementById("build-version");
+  if (buildVersionEl) buildVersionEl.textContent = "build " + BUILD_VERSION;
+
   const canvas = document.getElementById("game");
   const ctx = canvas.getContext("2d");
   const W = canvas.width;
@@ -21,6 +31,8 @@
   const startBtn = document.getElementById("start-btn");
   const retryBtn = document.getElementById("retry-btn");
   const finaleBtn = document.getElementById("finale-btn");
+  const finaleTitleEl = document.getElementById("finale-title");
+  const finaleQuoteEl = document.getElementById("finale-quote");
   const menuQuote = document.getElementById("menu-quote");
   const menuHighscore = document.getElementById("menu-highscore");
   const overQuote = document.getElementById("over-quote");
@@ -73,7 +85,7 @@
   // PNGs copied from the Unity project's run cycle.
   // Bump when any art asset changes so phones fetch the new files instead of
   // serving stale cached copies (style.css/game.js have their own ?v=).
-  const ASSET_VERSION = 4;
+  const ASSET_VERSION = 5;
   const av = (p) => p + "?av=" + ASSET_VERSION;
 
   const idleSprite = new Image();
@@ -231,6 +243,63 @@
   // just bounces Troll back with a line of dialogue.
   const treeExitImg = loadImg("assets/forest/cutscene/tree-exit.png");
   const artifactImg = loadImg("assets/forest/cutscene/artifact.png");
+
+  // --- World 2: Sun-Blasted Dunes (PLACEHOLDER art) ------------------------
+  // Procedural dune parallax + hue-shifted copies of the forest terrain
+  // (tools/make_dunes_placeholders.py), so all collision metadata
+  // (surfaceFrac, bumps, branch profile) carries over unchanged. Replace the
+  // files in assets/dunes/ 1:1 with real Flux/ComfyUI art when generated —
+  // see docs/WORLD2_ASSET_PROMPTS.md.
+  const dunesLayers = [
+    { img: loadImg("assets/dunes/parallax/sky.png"), mult: 0.05 },
+    { img: loadImg("assets/dunes/parallax/far.png"), mult: 0.15 },
+    { img: loadImg("assets/dunes/parallax/mid.png"), mult: 0.35 },
+    { img: loadImg("assets/dunes/parallax/near.png"), mult: 0.6 },
+    { img: loadImg("assets/dunes/parallax/near2.png"), mult: 0.75 },
+    { img: loadImg("assets/dunes/parallax/fg.png"), mult: 0.85 },
+  ];
+  const dunesGroundPool = [
+    { img: loadImg("assets/dunes/terrain/ground-1.png"), surfaceFrac: 0.325 },
+    { img: loadImg("assets/dunes/terrain/ground-2.png"), surfaceFrac: 0.567 },
+    {
+      img: loadImg("assets/dunes/terrain/ground-3.png"),
+      surfaceFrac: 0.14,
+      bumps: [
+        { xFrac0: 0.17, xFrac1: 0.3, topFrac: 0.085 },
+        { xFrac0: 0.3, xFrac1: 0.93, topFrac: 0.03 },
+      ],
+    },
+  ];
+  const dunesBranchTile = loadImg("assets/dunes/terrain/branch.png");
+  const dunesTreeExitImg = loadImg("assets/dunes/cutscene/tree-exit.png");
+
+  // Per-world art sets. Each level names its theme; loadLevel switches this.
+  const THEMES = {
+    forest: {
+      layers: forestLayers,
+      groundPool: groundTilePool,
+      branch: branchTile,
+      treeExit: treeExitImg,
+      fallbackGround: "#e8d9b0",
+      // Structural ground-fill backstop colour (see drawGroundBand) — a dark
+      // soil/root tone pulled from the existing shelf art's own underside
+      // palette, so gaps in the floating-island art read as "more ground",
+      // not sky. Placeholder until real seamless ground-fill art exists.
+      groundFillColor: "#3b2a20",
+      connectorColors: ["#5a4126", "#3d2b1f"], // tree-trunk placeholder gradient
+    },
+    dunes: {
+      layers: dunesLayers,
+      groundPool: dunesGroundPool,
+      branch: dunesBranchTile,
+      treeExit: dunesTreeExitImg,
+      fallbackGround: "#e3cf9a",
+      groundFillColor: "#6b4f2e",
+      connectorColors: ["#9c7a4a", "#6b4f2e"], // sandstone-pillar placeholder gradient
+    },
+  };
+  let themeName = "forest";
+  const theme = () => THEMES[themeName] || THEMES.forest;
   // King Angus art hook: drop a transparent PNG at assets/king-angus.png and
   // it replaces the procedural placeholder in the intro cutscene.
   const kingImg = loadImg("assets/king-angus.png");
@@ -255,11 +324,24 @@
   SAURO_POSES.forEach((pose) => {
     loadImg(`assets/enemies/saurosapien/${pose}.png`, (img) => (sauroSprites[pose] = img));
   });
+  // Boss defeat/redemption art (2026-07-18): the Saurosapien Captain is
+  // purified, not destroyed — canon per GAME_BIBLE §3/§5 ("Bosses get
+  // redemption-tinged endings, never cruelty"). He collapses at the killing
+  // blow (defeated-reptilian-boss.png), then a beat later sits up dejected
+  // but freed of corruption (dejected_after_defeat.png) — see purifyBoss()
+  // and the isBoss+purifying branch of drawEnemy(). Replaces the old bug
+  // where a downed boss fell back to the enlarged forest-guardian "brute"
+  // placeholder art mid-death.
+  let sauroDefeatedImg = null;
+  let sauroDejectedImg = null;
+  loadImg("assets/enemies/Saurosapiens/Type_1/defeated-reptilian-boss.png", (img) => (sauroDefeatedImg = img));
+  loadImg("assets/enemies/Saurosapiens/Type_1/dejected_after_defeat.png", (img) => (sauroDejectedImg = img));
   // Cache of {img,x,w,h} ground-shelf segments spanning the current level,
   // rebuilt lazily (see drawGroundBand) once art has loaded and whenever
   // levelWidth changes — random per-segment choice from groundTilePool.
   let groundStrip = null;
   let groundStripLevelWidth = null;
+  let groundStripTheme = null;
 
   const HIGHSCORE_KEY = "tu_candydash_highscore";
   const getHighscore = () => Number(localStorage.getItem(HIGHSCORE_KEY) || 0);
@@ -301,6 +383,92 @@
     }
   }
 
+  // --- Music ---------------------------------------------------------------
+  // One looping track per world (assets/Music/World_<n>/World_<n>.mp3), swapped
+  // for a boss track (Boss_<n>.mp3) on that world's boss level. World number is
+  // read straight off the level name's "<n>-<m>" prefix, so worlds 3-5 (tracks
+  // already on disk) pick this up automatically once their levels exist.
+  const MUSIC_VOLUME_SCALE = 0.55; // music sits under the beep() sfx, not over it
+  let currentMusic = null;
+  let currentMusicSrc = null;
+  function musicSrcForLevel(lvl) {
+    const world = parseInt(lvl.name.split("-")[0], 10);
+    if (!Number.isFinite(world)) return null;
+    const file = lvl.boss ? `Boss_${world}.mp3` : `World_${world}.mp3`;
+    return `assets/Music/World_${world}/${file}`;
+  }
+  // Preloading of every distinct track happens once LEVELS actually exists —
+  // see preloadAllMusic(), called right after the LEVELS array below (it
+  // used to sit here and reference LEVELS before it was declared, a
+  // temporal-dead-zone ReferenceError thrown at script load that silently
+  // killed every button on the page, Play included — confirmed live 2026-07-18).
+  function applyMusicVolume() {
+    if (currentMusic) currentMusic.volume = settings.sound ? settings.volume * MUSIC_VOLUME_SCALE : 0;
+  }
+  function stopMusic() {
+    if (currentMusic) currentMusic.pause();
+    currentMusic = null;
+    currentMusicSrc = null;
+  }
+  // A blocked first attempt (confirmed live, 2026-07-18: Chrome rejected it
+  // with NotAllowedError even from inside the Play button's own click
+  // handler) must not be the end of it — retry on the very next interaction
+  // ANYWHERE on the page (a jump, a shot, a menu click), since by then the
+  // browser has certainly registered a real gesture. Without this, a track
+  // that failed once was previously marked "already the current track" and
+  // silently never tried again for the rest of the run.
+  let musicUnlockArmed = false;
+  function armMusicUnlock() {
+    if (musicUnlockArmed) return;
+    musicUnlockArmed = true;
+    const retry = () => {
+      musicUnlockArmed = false;
+      document.removeEventListener("pointerdown", retry);
+      document.removeEventListener("keydown", retry);
+      if (currentMusic) currentMusic.play().catch((err) => console.warn("Music retry failed:", err));
+    };
+    document.addEventListener("pointerdown", retry, { once: true });
+    document.addEventListener("keydown", retry, { once: true });
+  }
+  function playLevelMusic(idx) {
+    const src = musicSrcForLevel(LEVELS[idx]);
+    if (!src) {
+      stopMusic();
+      return;
+    }
+    if (src === currentMusicSrc && currentMusic && !currentMusic.paused) return; // already playing this track
+    if (src === currentMusicSrc && currentMusic) {
+      // Same track, but a previous attempt never actually started (blocked
+      // or still loading) — just try again on the existing element instead
+      // of tearing down and recreating it.
+      currentMusic.play().catch((err) => {
+        console.warn("Music playback blocked/failed:", src, err);
+        armMusicUnlock();
+      });
+      return;
+    }
+    if (currentMusic) currentMusic.pause();
+    currentMusic = new Audio(src);
+    currentMusic.loop = true;
+    currentMusicSrc = src;
+    // Unlike the image loader (loadImg), a failed/blocked track would
+    // otherwise fail completely silently — log it so a missing file, a bad
+    // path, or a blocked-autoplay browser is actually diagnosable from the
+    // console instead of just "no music, no idea why".
+    currentMusic.addEventListener("error", () => {
+      console.warn("Music failed to load:", src, currentMusic.error);
+    });
+    applyMusicVolume();
+    // Autoplay can be blocked before a user gesture; loadLevel is always
+    // reached via Play/Retry/a level-exit walk, all user gestures, but
+    // Chrome has been observed rejecting it anyway — armMusicUnlock() covers
+    // that case by retrying on the next interaction of any kind.
+    currentMusic.play().catch((err) => {
+      console.warn("Music playback blocked/failed:", src, err);
+      armMusicUnlock();
+    });
+  }
+
   // --- Tuning --------------------------------------------------------------
   const PLAYER_W = 86;
   const PLAYER_H = 86;
@@ -310,11 +478,15 @@
   const MOVE_MAX_SPEED = 260;
   const CANDY_PICKUP_R = 58;
   const CANDY_GLOW_R = 100;
+  const CANDY_BIG_SCORE = 60; // vs. 15 for a regular candy
+  const CANDY_BIG_CHARGE_FRAC = 3 / 10; // a "Matrix Shard" is worth 3 regular candies
   const HORN_CHARGE_MAX = 10;
   const SHOT_COST = 3;
   const BOLT_SPEED = 760;
   const BOSS_SCALE = 2.2;
-  const BOSS_HP = 4;
+  // Each horn bolt costs the boss exactly 1/10 of his max health, regardless
+  // of world — so BOSS_HP is always 10 (10 hits to purify).
+  const BOSS_HP = 10;
   const BOSS_CHASE_SPEED = 85; // hunts Troll within his arena rather than pacing
   // Forest Captain's blaster: telegraphed (about_to_shoot pose), then a
   // straight blue bolt aimed at Troll's position when fired.
@@ -323,10 +495,19 @@
   const BOSS_TELEGRAPH = 0.6;
   const BOSS_FIRE_POSE_TIME = 0.45;
   const BOSS_BOLT_SPEED = 430;
-  const BOSS_BOLT_DAMAGE = 3;
-  const DOUBLE_JUMP_COST = 2; // Matrix energy also powers a mid-air second jump
+  // A boss blaster shot is scaled to Troll's CURRENT health, not a flat
+  // number: normally a brutal 3/4 of whatever he has left, but the energy
+  // shield (granted once the rune is assembled) tunes his ward down so it
+  // only costs 1/10 — see the bossBolt handling in the projectile-hit loop.
+  const BOSS_BOLT_DAMAGE_FRAC = 0.75;
+  const BOSS_BOLT_DAMAGE_FRAC_SHIELDED = 0.1;
+  // Matrix energy also powers a mid-air second jump. Kept deliberately cheap
+  // (much less than a candy's own 1/10 charge) so double-jumping to snag one
+  // stray candy is never a net loss.
+  const DOUBLE_JUMP_COST = 0.5;
   const PURIFY_DURATION = 1.1; // seconds a purified critter hops away for
   const BOSS_PURIFY_DURATION = 1.5; // stays visible until the finale cut (1.4s)
+  const BOSS_DEFEAT_FALL_TIME = 0.6; // collapses, then sits up dejected for the remainder
   const HORN_REGEN_PER_SEC = 0.4; // slow passive trickle — full recharge from empty takes 25s
   const PORTAL_OPEN_COST = HORN_CHARGE_MAX; // the final portal needs a full charge to open
 
@@ -337,10 +518,18 @@
   const BOSS_TOUCH_DAMAGE = 4;
   const SPIT_DAMAGE = 2; // spitter projectile
   const HURT_INVULN = 1.2; // seconds of post-hit invulnerability (Troll flickers)
-  const HEART_HEAL = 5;
+  const HEART_HEAL = PLAYER_MAX_HP; // a heart fully restores Troll's life energy
+  const BRUTE_ROCK_RANGE = 420; // brutes lob a rock at Troll whenever he's in range but out of walking reach
+  const BRUTE_ROCK_COOLDOWN = 2.4;
 
   const DRONE_CHASE_SPEED = 160; // drones periodically break patrol and swoop at Troll
   const DRONE_SWOOP_TIME = 2.2;
+  // World 1 is the introductory realm — drones there shouldn't swoop from as
+  // far away as later worlds, so an early player has more room to react
+  // before getting jumped (Jonathan, 2026-07-18: current shared range made
+  // level 1 harder than intended for a first realm).
+  const DRONE_SWOOP_TRIGGER_RANGE = 420;
+  const DRONE_SWOOP_TRIGGER_RANGE_WORLD1 = 240;
   // Artifact guardians: while Troll is closing in on an uncollected rune
   // piece, any drone in range pursues him relentlessly (drones fly and
   // ignore platforms, so the straight line to Troll is always a valid path).
@@ -357,6 +546,33 @@
   // magical-energy feel as the horn meter.
   const SHIELD_MAX = 6;
   const SHIELD_REGEN_PER_SEC = 0.35;
+
+  // Sinking sand (World 2's new traversal concept): a `sink: true` platform
+  // gives way underfoot — it sinks while Troll stands on it and springs back
+  // once he's off. No pits exist, so bottoming out just means losing the
+  // height advantage, not dying (kind-for-kids rule).
+  const SINK_MAX = 110;
+  const SINK_RATE = 60; // px/sec while stood on
+  const SINK_RECOVER = 90; // px/sec spring-back
+
+  // Healed critters (from World 2's opening beat onward, and retroactively
+  // everywhere): purified creatures no longer hop off-screen and despawn —
+  // they stay in the level, wandering cutely and harmlessly. The level
+  // visibly fills with life as you cleanse it.
+  const HEALED_WANDER_SPEED = 25;
+  const HEALED_WANDER_RANGE = 90; // half-width of the wander patrol
+
+  // From World 2 onward, a redeemed BRUTE isn't safe forever: he starts
+  // flashing (corruption creeping back in) and fully re-corrupts after
+  // RELAPSE_TIME unless Troll reinforces the purification with two more
+  // bolts, which cancels the relapse for good.
+  const BRUTE_RELAPSE_TIME = 60;
+  const BRUTE_RELAPSE_FLASH_LEAD = 10; // starts flashing this many seconds out
+  const BRUTE_REINFORCE_SHOTS = 2;
+  // Shooting ANY already-redeemed critter again (brute or otherwise, once it
+  // isn't mid-reinforcement) is a genuine mistake: it plays the real
+  // die/hop-off-screen sequence and Troll feels bad about it.
+  const OOPS_LINES = ['"Woops."', '"Darnit."', '"Sorry, Dad."', '"It\'ll be fine..."'];
 
   // Assembly puzzle: the five artifact pieces (one hidden per level) are
   // slices of the Eihwaz rune — resilience. At the station they go into a
@@ -398,6 +614,7 @@
   const LEVELS = [
     {
       name: "1-1 Into the Wood",
+      intro: { king: KING_LINE, troll: TROLL_INTRO_LINE },
       width: 2400,
       platforms: [
         { x: 480, y: TIER1_Y, w: 170 },
@@ -411,14 +628,18 @@
         { kind: "drone", x: 1020, patrol: [960, 1160] },
         { kind: "grunt", x: 1400, patrol: [1340, 1520] },
       ],
+      hearts: [{ x: 1150, y: TIER1_Y - 160 }],
       candies: [
         { x: 300, y: GROUND_Y - 40 },
         { x: 565, y: TIER1_Y - 32 },
+        { x: 985, y: TIER1_Y - 32 },
         { x: 1050, y: GROUND_Y - 40 },
         { x: 1245, y: TIER1_Y - 32 },
         { x: 1700, y: GROUND_Y - 40 },
         { x: 1925, y: TIER1_Y - 32 },
         { x: 2150, y: GROUND_Y - 40 },
+        { x: 2280, y: GROUND_Y - 40 },
+        { x: 1150, y: TIER1_Y - 120, big: true },
       ],
       artifact: { x: 1245, y: TIER1_Y - 60 },
     },
@@ -430,8 +651,8 @@
         { x: 700, y: TIER2_Y, w: 150 },
         { x: 1000, y: TIER1_Y, w: 170 },
         { x: 1300, y: TIER2_Y, w: 150 },
-        // High route to the heart: step up from the 1300 platform, cross the
-        // rope bridge, and the heart floats over the far perch.
+        // High route: step up from the 1300 platform, cross the rope bridge,
+        // and a rare Matrix Shard floats over the far perch.
         { x: 1385, y: TIER2_Y - 55, w: 110 },
         { x: 1450, y: TIER2_Y - 110, w: 460, bridge: true },
         { x: 1930, y: TIER2_Y - 110, w: 130 },
@@ -439,7 +660,6 @@
         { x: 2000, y: TIER2_Y, w: 160 },
         { x: 2350, y: TIER1_Y, w: 170 },
       ],
-      hearts: [{ x: 1995, y: TIER2_Y - 160 }],
       enemies: [
         { kind: "drone", x: 520, patrol: [470, 630] },
         { kind: "grunt", x: 900, patrol: [840, 1040] },
@@ -455,7 +675,9 @@
         { x: 1375, y: TIER2_Y - 32 },
         { x: 1600, y: GROUND_Y - 40 },
         { x: 1750, y: TIER1_Y - 32 },
+        { x: 1930, y: TIER2_Y - 160, big: true },
         { x: 2080, y: TIER2_Y - 32 },
+        { x: 2250, y: GROUND_Y - 40 },
         { x: 2550, y: GROUND_Y - 40 },
       ],
       artifact: { x: 2080, y: TIER2_Y - 60 },
@@ -483,6 +705,7 @@
         { kind: "grunt", x: 2250, patrol: [2180, 2380] },
         { kind: "drone", x: 2600, patrol: [2540, 2720] },
       ],
+      hearts: [{ x: 1780, y: TIER2_Y - 160 }],
       candies: [
         { x: 250, y: GROUND_Y - 40 },
         { x: 470, y: TIER1_Y - 32 },
@@ -492,8 +715,11 @@
         { x: 1555, y: TIER1_Y - 32 },
         { x: 1855, y: TIER2_Y - 32 },
         { x: 2150, y: TIER1_Y - 32 },
+        { x: 2300, y: GROUND_Y - 40 },
         { x: 2460, y: TIER2_Y - 32 },
+        { x: 2700, y: TIER1_Y - 32 },
         { x: 2850, y: GROUND_Y - 40 },
+        { x: 2380, y: TIER2_Y - 130, big: true },
       ],
       artifact: { x: 2380, y: TIER2_Y - 60 },
     },
@@ -545,8 +771,8 @@
         { x: 3145, y: TIER2_Y - 32 },
         { x: 3465, y: TIER1_Y - 32 },
         { x: 3650, y: GROUND_Y - 40 },
+        { x: 1770, y: TIER2_Y - 130, big: true },
       ],
-      hearts: [{ x: 1770, y: TIER2_Y - 160 }],
       artifact: { x: 3145, y: TIER2_Y - 60 },
     },
     {
@@ -570,16 +796,272 @@
         { x: 1400, y: GROUND_Y - 40 },
         { x: 1550, y: GROUND_Y - 40 },
         { x: 1700, y: GROUND_Y - 40 },
+        { x: 1100, y: TIER2_Y - 100, big: true },
       ],
       boss: { patrol: [1900, 2350] },
       artifact: { x: 1100, y: TIER2_Y - 60 },
+      finale: {
+        title: "The Whispering Forest is healed!",
+        quote:
+          "\"One realm doon, laddie! But the desert pool's glowin' somethin' fierce — nae rest for the wicked. In ye go!\"",
+      },
+    },
+
+    // ============ WORLD 2 — THE SUN-BLASTED DUNES ============
+    // Canon (STORY_ARC doc, approved 2026-07-17): "The Occupation" — golden
+    // desert, heat shimmer, bleached bones of portal trees. New traversal
+    // concept: sinking sand platforms. Angus's opening beat retunes the
+    // fiction: purified critters now STAY, wandering harmlessly.
+    // All art is PLACEHOLDER (procedural dunes + hue-shifted forest terrain)
+    // until the real set is generated — docs/WORLD2_ASSET_PROMPTS.md.
+    {
+      name: "2-1 The Bleached Sands",
+      theme: "dunes",
+      intro: {
+        king:
+          "Hold it right there laddie! I've been watchin' from the big pool — ye're shootin' those poor corrupted critters TOO HARD! They're no' villains, they're PATIENTS! Gentle now — let the magic do the work.",
+        troll: "Fine. I'll shoot them... softly. With feeling.",
+        kingOut: 9.4,
+        end: 12.4,
+      },
+      width: 2600,
+      platforms: [
+        { x: 460, y: TIER1_Y, w: 170 },
+        { x: 800, y: TIER1_Y, w: 150, sink: true },
+        { x: 1140, y: TIER1_Y, w: 170 },
+        { x: 1440, y: TIER2_Y, w: 150, sink: true },
+        { x: 1760, y: TIER1_Y, w: 170 },
+        { x: 2100, y: TIER1_Y, w: 160, sink: true },
+      ],
+      enemies: [
+        { kind: "drone", x: 700, patrol: [640, 820] },
+        { kind: "grunt", x: 1250, patrol: [1190, 1380] },
+        { kind: "drone", x: 1900, patrol: [1840, 2010] },
+      ],
+      hearts: [{ x: 1440, y: TIER2_Y - 160 }],
+      candies: [
+        { x: 300, y: GROUND_Y - 40 },
+        { x: 545, y: TIER1_Y - 32 },
+        { x: 875, y: TIER1_Y - 32 },
+        { x: 1225, y: TIER1_Y - 32 },
+        { x: 1515, y: TIER2_Y - 32 },
+        { x: 1845, y: TIER1_Y - 32 },
+        { x: 2180, y: TIER1_Y - 32 },
+        { x: 2280, y: GROUND_Y - 40 },
+        { x: 2380, y: GROUND_Y - 40 },
+        { x: 1440, y: TIER2_Y - 120, big: true },
+      ],
+      artifact: { x: 1515, y: TIER2_Y - 60 },
+    },
+    {
+      name: "2-2 The Sunken Caravan",
+      theme: "dunes",
+      width: 3000,
+      platforms: [
+        { x: 420, y: TIER1_Y, w: 160 },
+        { x: 720, y: TIER2_Y, w: 150, sink: true },
+        { x: 1020, y: TIER1_Y, w: 160, sink: true },
+        { x: 1320, y: TIER2_Y, w: 150 },
+        { x: 1405, y: TIER2_Y - 55, w: 110, sink: true },
+        { x: 1470, y: TIER2_Y - 110, w: 460, bridge: true },
+        { x: 1950, y: TIER2_Y - 110, w: 130 },
+        { x: 1680, y: TIER1_Y, w: 190 },
+        { x: 2030, y: TIER2_Y, w: 150, sink: true },
+        { x: 2380, y: TIER1_Y, w: 170 },
+      ],
+      enemies: [
+        { kind: "drone", x: 540, patrol: [490, 650] },
+        { kind: "grunt", x: 920, patrol: [860, 1060] },
+        { kind: "spitter", x: 1470 },
+        { kind: "grunt", x: 1830, patrol: [1750, 1980] },
+        { kind: "drone", x: 2230, patrol: [2180, 2350] },
+      ],
+      candies: [
+        { x: 270, y: GROUND_Y - 40 },
+        { x: 500, y: TIER1_Y - 32 },
+        { x: 795, y: TIER2_Y - 32 },
+        { x: 1100, y: TIER1_Y - 32 },
+        { x: 1395, y: TIER2_Y - 32 },
+        { x: 1620, y: GROUND_Y - 40 },
+        { x: 1775, y: TIER1_Y - 32 },
+        { x: 1950, y: TIER2_Y - 32 },
+        { x: 2105, y: TIER2_Y - 32 },
+        { x: 2620, y: GROUND_Y - 40 },
+        { x: 1950, y: TIER2_Y - 130, big: true },
+      ],
+      artifact: { x: 2015, y: TIER2_Y - 170 },
+    },
+    {
+      name: "2-3 Mirage Flats",
+      theme: "dunes",
+      width: 3200,
+      platforms: [
+        { x: 420, y: TIER1_Y, w: 160, sink: true },
+        { x: 680, y: TIER2_Y, w: 140, sink: true },
+        { x: 950, y: TIER1_Y, w: 170 },
+        { x: 1240, y: TIER2_Y, w: 160, sink: true },
+        { x: 1540, y: TIER1_Y, w: 190 },
+        { x: 1870, y: TIER2_Y, w: 150, sink: true },
+        { x: 2150, y: TIER1_Y, w: 200 },
+        { x: 2490, y: TIER2_Y, w: 160, sink: true },
+        { x: 2780, y: TIER1_Y, w: 170 },
+      ],
+      enemies: [
+        { kind: "drone", x: 520, patrol: [470, 630] },
+        { kind: "spitter", x: 860 },
+        { kind: "grunt", x: 1150, patrol: [1080, 1290] },
+        { kind: "brute", x: 1640, patrol: [1470, 1850] },
+        { kind: "spitter", x: 2050 },
+        { kind: "grunt", x: 2360, patrol: [2290, 2490] },
+        { kind: "drone", x: 2730, patrol: [2670, 2850] },
+      ],
+      hearts: [{ x: 1870, y: TIER2_Y - 160 }],
+      candies: [
+        { x: 260, y: GROUND_Y - 40 },
+        { x: 490, y: TIER1_Y - 32 },
+        { x: 745, y: TIER2_Y - 32 },
+        { x: 1035, y: TIER1_Y - 32 },
+        { x: 1320, y: TIER2_Y - 32 },
+        { x: 1635, y: TIER1_Y - 32 },
+        { x: 1945, y: TIER2_Y - 32 },
+        { x: 2250, y: TIER1_Y - 32 },
+        { x: 2410, y: GROUND_Y - 40 },
+        { x: 2570, y: TIER2_Y - 32 },
+        { x: 3000, y: GROUND_Y - 40 },
+        { x: 1870, y: TIER2_Y - 120, big: true },
+      ],
+      artifact: { x: 2570, y: TIER2_Y - 60 },
+    },
+    {
+      name: "2-4 The Bone Garden",
+      theme: "dunes",
+      width: 3900,
+      platforms: [
+        { x: 400, y: TIER1_Y, w: 170 },
+        { x: 680, y: TIER2_Y, w: 150, sink: true },
+        { x: 970, y: TIER1_Y, w: 160, sink: true },
+        { x: 1220, y: TIER2_Y, w: 140 },
+        { x: 1310, y: TIER2_Y - 110, w: 420, bridge: true },
+        { x: 1730, y: TIER2_Y - 110, w: 120, sink: true },
+        { x: 1520, y: TIER1_Y, w: 180 },
+        { x: 1880, y: TIER2_Y, w: 150, sink: true },
+        { x: 2180, y: TIER1_Y, w: 170 },
+        { x: 2480, y: TIER2_Y, w: 150, sink: true },
+        { x: 2790, y: TIER1_Y, w: 190 },
+        { x: 3110, y: TIER2_Y, w: 150, sink: true },
+        { x: 3430, y: TIER1_Y, w: 170 },
+      ],
+      enemies: [
+        { kind: "grunt", x: 540, patrol: [460, 680] },
+        { kind: "drone", x: 830, patrol: [770, 970] },
+        { kind: "spitter", x: 1140 },
+        { kind: "brute", x: 1480, patrol: [1380, 1650] },
+        { kind: "drone", x: 1830, patrol: [1770, 1980] },
+        { kind: "grunt", x: 2080, patrol: [2010, 2230] },
+        { kind: "spitter", x: 2390 },
+        { kind: "brute", x: 2690, patrol: [2590, 2890] },
+        { kind: "drone", x: 2990, patrol: [2930, 3140] },
+        { kind: "grunt", x: 3290, patrol: [3220, 3440] },
+        { kind: "spitter", x: 3600 },
+      ],
+      candies: [
+        { x: 270, y: GROUND_Y - 40 },
+        { x: 485, y: TIER1_Y - 32 },
+        { x: 755, y: TIER2_Y - 32 },
+        { x: 1050, y: TIER1_Y - 32 },
+        { x: 1290, y: TIER2_Y - 32 },
+        { x: 1520, y: TIER2_Y - 142 },
+        { x: 1610, y: TIER1_Y - 32 },
+        { x: 1955, y: TIER2_Y - 32 },
+        { x: 2265, y: TIER1_Y - 32 },
+        { x: 2410, y: GROUND_Y - 40 },
+        { x: 2555, y: TIER2_Y - 32 },
+        { x: 2885, y: TIER1_Y - 32 },
+        { x: 3185, y: TIER2_Y - 32 },
+        { x: 3515, y: TIER1_Y - 32 },
+        { x: 3720, y: GROUND_Y - 40 },
+        { x: 1790, y: TIER2_Y - 130, big: true },
+      ],
+      artifact: { x: 3185, y: TIER2_Y - 60 },
+    },
+    {
+      name: "2-5 The Dune Warden",
+      theme: "dunes",
+      // Canon: a Saurosapien quartermaster hoarding water for troops who
+      // never came. Uses the same Saurosapien pose art as the Forest Captain
+      // for now (an honest placeholder — he IS the same species).
+      width: 2700,
+      station: false, // the rune was fused back in World 1
+      platforms: [
+        { x: 400, y: TIER1_Y, w: 160, sink: true },
+        { x: 720, y: TIER1_Y, w: 160 },
+        { x: 1040, y: TIER2_Y, w: 150, sink: true },
+      ],
+      enemies: [
+        { kind: "grunt", x: 520, patrol: [460, 640] },
+        { kind: "drone", x: 920, patrol: [870, 1070] },
+        { kind: "spitter", x: 1180 },
+      ],
+      candies: [
+        { x: 250, y: GROUND_Y - 40 },
+        { x: 480, y: TIER1_Y - 32 },
+        { x: 800, y: TIER1_Y - 32 },
+        { x: 1120, y: TIER2_Y - 32 },
+        { x: 1430, y: GROUND_Y - 40 },
+        { x: 1580, y: GROUND_Y - 40 },
+        { x: 1730, y: GROUND_Y - 40 },
+        { x: 1120, y: TIER2_Y - 100, big: true },
+      ],
+      boss: { patrol: [2000, 2450] },
+      artifact: { x: 1120, y: TIER2_Y - 60 },
+      finale: {
+        title: "The Sun-Blasted Dunes are healed!",
+        quote:
+          "\"Two realms doon! Och... but whit's this on yon crates, Cerebra lass? Ye've gone awfy quiet...\"",
+      },
     },
   ];
+
+  // A track only starts downloading the instant its level actually needs it,
+  // which is what caused the "takes a while before it starts" feel — not a
+  // hosting/streaming problem (a plain static .mp3 over HTTP already streams
+  // via range requests; a custom PHP wrapper wouldn't fetch it any faster
+  // and risks breaking seeking if not handled carefully, for no real gain).
+  // Instead, warm every distinct track into the browser's cache right away —
+  // by the time any level actually wants one, there's a good chance it's
+  // already fully downloaded from sitting idle in the background while the
+  // player's still on the menu or an earlier level.
+  (function preloadAllMusic() {
+    const seen = new Set();
+    LEVELS.forEach((lvl) => {
+      const src = musicSrcForLevel(lvl);
+      if (!src || seen.has(src)) return;
+      seen.add(src);
+      const warm = new Audio();
+      warm.preload = "auto";
+      warm.src = src;
+      warm.load();
+    });
+  })();
 
   let state = "menu"; // menu | playing | gameover | finale
   let currentLevelIndex = 0;
   let levelWidth = LEVELS[0].width;
   let cameraX = 0;
+  // A level's forward spawn point (x=80) sits inside the NEXT level's
+  // back-exit trigger zone, and the back-exit's arrival point
+  // (levelWidth-220) sits inside THIS level's forward-exit trigger zone —
+  // so an exit must not be able to fire until Troll has actually walked away
+  // from it at least once since spawning. A plain timed grace period isn't
+  // enough (confirmed live, 2026-07-18: standing still at spawn — even just
+  // to look around — is enough for the timer to run out while still
+  // overlapping the zone, firing it anyway with zero intent from the
+  // player). exitPrimed/backExitPrimed are computed fresh in loadLevel from
+  // the actual spawn distance, then latch true permanently once Troll clears
+  // EXIT_PRIME_DISTANCE — like a door that only arms once you've left the room.
+  const EXIT_PRIME_DISTANCE = 220;
+  let exitPrimed = true;
+  let backExitPrimed = true;
   let player,
     obstacles,
     platforms,
@@ -592,6 +1074,7 @@
     dust,
     portal,
     exitPoint,
+    backExitPoint,
     artifact,
     artifactCollected,
     bossDefeated,
@@ -610,7 +1093,26 @@
     lastTime;
   // Run-wide progress (survives level loads within one run, reset by startGame)
   let artifactsTaken = LEVELS.map(() => false);
+  // Per-level enemy fates, so walking back through the mirrored stump (or
+  // forward again later) doesn't respawn everything as if freshly corrupted.
+  // levelEnemyState[idx] is null until that level has been visited once; once
+  // set, it's an array parallel to LEVELS[idx].enemies of null ("still
+  // corrupted/untouched, respawn normally") | "healed" | "gone" (purified for
+  // good in World 1, or shot again after redemption — never respawns).
+  let levelEnemyState = LEVELS.map(() => null);
+  // A world's sub-levels are really one continuous realm split into
+  // segments for level-design/loading purposes, not independent worlds you
+  // re-enter fresh — so pickups persist across a revisit exactly like
+  // enemies do (fixes an energy-farming exploit: walking back and forth
+  // through the stump used to reset every candy/heart to available again).
+  // Marked true the instant something's collected (not just snapshotted on
+  // exit) because a taken candy is spliced out of `candies` immediately —
+  // by the time a level unloads, there'd be nothing left to snapshot.
+  const levelCandyState = LEVELS.map((lvl) => (lvl.candies || []).map(() => false));
+  const levelHeartState = LEVELS.map((lvl) => (lvl.hearts || []).map(() => false));
   let artifactsAssembled = false;
+  let introSeen = {}; // level index -> cutscene already played this run
+  let finaleNextLevel = null; // set by enterFinale: continue here, or null = game complete
   let puzzle = null; // active assembly minigame
   let piecesViewTimer = 0; // rune-pieces popup (tap the HUD artifact icon)
   let unicornEmerge = 0; // seconds since the boss fell — drives her slide-out
@@ -628,7 +1130,8 @@
     if (kind === "grunt") e = { kind, x, y: GROUND_Y - 58, w: 34, h: 58, vx: 60, hp: 2 };
     else if (kind === "spitter")
       e = { kind, x, y: GROUND_Y - 62, w: 36, h: 62, vx: 0, hp: 2, spitTimer: 1.2 + Math.random() * 1.3 };
-    else if (kind === "brute") e = { kind, x, y: GROUND_Y - 78, w: 50, h: 78, vx: 65, hp: 3 };
+    else if (kind === "brute")
+      e = { kind, x, y: GROUND_Y - 78, w: 50, h: 78, vx: 65, hp: 3, rockTimer: 1.5 + Math.random() * 1.5 };
     else if (kind === "boss")
       e = {
         kind: "brute",
@@ -670,14 +1173,38 @@
     return e;
   }
 
-  function loadLevel(idx) {
+  // Records what happened to each of the outgoing level's enemies (by the
+  // sourceIndex tagged on them in loadLevel) before it gets torn down, so a
+  // later revisit (via the mirrored back-exit, or looping back around) can
+  // restore them instead of respawning everyone as freshly corrupted.
+  function snapshotOutgoingLevelEnemies() {
+    if (!obstacles || currentLevelIndex == null) return;
+    const outgoing = LEVELS[currentLevelIndex];
+    if (!outgoing || !outgoing.enemies) return;
+    const state = new Array(outgoing.enemies.length).fill("gone"); // absent = already gone
+    for (const o of obstacles) {
+      if (o.sourceIndex == null) continue; // the boss has no sourceIndex
+      // Mid-hop-away when leaving: it's on its way to "healed" (World 2+) or
+      // "gone" (World 1, or a redeemed critter shot again) — purify()/
+      // killRedeemedCritter() already decided which via o.healed/o.finalDeath,
+      // except the brief World-1 hop window itself, which is always "gone".
+      state[o.sourceIndex] = o.healed ? "healed" : o.purifying ? "gone" : null;
+    }
+    levelEnemyState[currentLevelIndex] = state;
+  }
+
+  function loadLevel(idx, enterFromEnd) {
+    snapshotOutgoingLevelEnemies();
     const prevCharge = player ? player.hornCharge : 0;
     currentLevelIndex = idx;
     const lvl = LEVELS[idx];
+    playLevelMusic(idx);
     levelWidth = lvl.width;
+    themeName = lvl.theme || "forest";
+    groundStrip = null; // force a rebuild with the level's own theme art
     const prevHp = player ? player.hp : PLAYER_MAX_HP;
     player = {
-      x: 80,
+      x: enterFromEnd ? levelWidth - 220 : 80,
       y: GROUND_Y - PLAYER_H,
       w: PLAYER_W,
       h: PLAYER_H,
@@ -685,7 +1212,7 @@
       vy: 0,
       grounded: true,
       squash: 1,
-      facing: 1,
+      facing: enterFromEnd ? -1 : 1,
       gallop: 0,
       hp: prevHp > 0 ? prevHp : PLAYER_MAX_HP,
       hurtTimer: 0,
@@ -697,11 +1224,61 @@
       crouching: false,
       idleTimer: 0,
     };
-    platforms = lvl.platforms.map((p) => ({ x: p.x, y: p.y, w: p.w, h: 18, bridge: !!p.bridge }));
-    obstacles = lvl.enemies.map((e) => makeEnemy(e.kind, e.x, e.patrol));
+    platforms = lvl.platforms.map((p) => ({
+      x: p.x,
+      y: p.y,
+      w: p.w,
+      h: 18,
+      bridge: !!p.bridge,
+      sink: !!p.sink,
+      sinkOff: 0,
+    }));
+    const savedEnemyState = levelEnemyState[idx];
+    obstacles = lvl.enemies
+      .map((e, i) => {
+        const saved = savedEnemyState ? savedEnemyState[i] : null;
+        if (saved === "gone") return null; // purified for good on an earlier visit
+        const o = makeEnemy(e.kind, e.x, e.patrol);
+        o.sourceIndex = i;
+        if (saved === "healed") {
+          // Restore straight into the settled healed/wandering state — skip
+          // the sparkle/hop entrance entirely, it already happened.
+          o.healed = true;
+          o.hp = 0;
+          o.wanderMin = Math.max(20, o.x - HEALED_WANDER_RANGE);
+          o.wanderMax = Math.min(lvl.width - 20, o.x + HEALED_WANDER_RANGE);
+          o.vx = HEALED_WANDER_SPEED * (Math.random() < 0.5 ? -1 : 1);
+          if (o.kind === "drone") o.y = o.homeY;
+          // Relapse is a live-play-session mechanic, not something meaningful
+          // to keep counting down while the level's unloaded — a restored
+          // healed brute comes back already reinforced/safe.
+          o.relapseTimer = null;
+          o.reinforceShots = 0;
+        }
+        return o;
+      })
+      .filter(Boolean);
     if (lvl.boss) obstacles.push(makeEnemy("boss", levelWidth - 500, lvl.boss.patrol));
-    candies = lvl.candies.map((c) => ({ x: c.x, y: c.y, r: 13, taken: false }));
-    hearts = (lvl.hearts || []).map((h) => ({ x: h.x, y: h.y, taken: false }));
+    candies = lvl.candies
+      .map((c, i) => ({
+        x: c.x,
+        y: c.y,
+        r: c.big ? 17 : 13,
+        big: !!c.big,
+        sourceIndex: i,
+        taken: !!levelCandyState[idx][i],
+      }))
+      // Already-collected candies are spliced out live (see the pickup loop
+      // below); match that here instead of leaving stale taken:true entries
+      // in the array — drawCandy has no taken-guard because it's never
+      // needed one before now.
+      .filter((c) => !c.taken);
+    hearts = (lvl.hearts || []).map((h, i) => ({
+      x: h.x,
+      y: h.y,
+      sourceIndex: i,
+      taken: !!levelHeartState[idx][i],
+    }));
     projectiles = [];
     sparkles = [];
     blasts = [];
@@ -713,9 +1290,10 @@
       // sequence around portalActivating).
       portal = { x: levelWidth - 140, y: GROUND_Y - 70, active: false };
       exitPoint = null;
-      // Mystical assembly station: the three artifacts must be combined here
-      // before the portal will respond at all.
-      station = { x: 1250, y: GROUND_Y };
+      // Mystical assembly station: the five artifacts must be combined here
+      // before the portal will respond at all. World 2's boss level opts out
+      // (station: false) — the rune was already fused back in World 1.
+      station = lvl.station === false ? null : { x: 1250, y: GROUND_Y };
       stationTimer = -1; // -1 idle; >= 0 counts up through the merge animation
     } else {
       // Levels 1-3 end at a hollow tree, not a portal.
@@ -723,6 +1301,22 @@
       exitPoint = { x: levelWidth - 140, y: GROUND_Y };
       station = null;
     }
+    // A mirrored tree stump near the start leads back to the previous level
+    // — but only within the same realm. There's nowhere to go back to from
+    // a run's very first level, and a realm boundary is always the level
+    // right after that realm's boss (Jonathan, 2026-07-18: no walking back
+    // from one realm into a previous, already-defeated realm's boss level —
+    // simpler and correct, vs. the alternative of making a defeated boss
+    // properly persist through a revisit).
+    // Sits left of Troll's spawn point (x=80) rather than the old x=140 past
+    // it — he now spawns ahead of/beside the tree instead of behind it,
+    // matching its natural (unmirrored) lit side facing right toward him.
+    backExitPoint = idx > 0 && !LEVELS[idx - 1].boss ? { x: 20, y: GROUND_Y } : null;
+    // See EXIT_PRIME_DISTANCE above — an exit starts primed only if Troll's
+    // spawn point already happens to be clear of it (the common case), so
+    // this doesn't regress a normal forward entry into a level with no boss.
+    exitPrimed = !exitPoint || Math.abs(player.x - exitPoint.x) > EXIT_PRIME_DISTANCE;
+    backExitPrimed = !backExitPoint || Math.abs(player.x - backExitPoint.x) > EXIT_PRIME_DISTANCE;
     // Artifacts persist across levels within a run — one per levels 1-3,
     // assembled on level 4 (see artifactsTaken / the station).
     artifact =
@@ -738,7 +1332,14 @@
     dialogueMessage = null;
     dialogueTimer = 0;
     dialogueCooldown = 0;
-    intro = null;
+    // Story cutscenes are per-level data now (lvl.intro) — played once per
+    // run, so a retry of the same level doesn't replay it.
+    if (lvl.intro && !introSeen[idx]) {
+      intro = { t: 0, ...lvl.intro };
+      introSeen[idx] = true;
+    } else {
+      intro = null;
+    }
     puzzle = null;
     unicornEmerge = 0;
     cameraX = 0;
@@ -790,13 +1391,10 @@
     beep(1200, 0.18, "sawtooth", 0.06);
   }
 
-  // Purifying doesn't remove the enemy outright: it turns into its purified
-  // art and hops away over PURIFY_DURATION (see the aging pass in update()),
-  // per the canon rule that corrupted creatures are healed, not destroyed.
-  function purify(target) {
+  function spawnPurifySparkles(target, count) {
     const tx = target.x + target.w / 2;
     const ty = target.y + target.h / 2;
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       sparkles.push({
         x: tx,
@@ -809,13 +1407,80 @@
         age: 0,
       });
     }
+  }
+
+  // World 1 predates Angus's "they're PATIENTS!" beat (see World 2's intro):
+  // a first-time purify there still plays the original hop-away-and-vanish
+  // animation, and the critter is gone for good — the game's fiction hasn't
+  // yet revealed that gentler healing is possible. From World 2 onward,
+  // purifying is instant and gentle: sparkles, a graphic swap, and the
+  // critter settles in place to wander harmlessly (no hop/death animation
+  // needed since nothing "died" for it to recover from).
+  function purify(target) {
+    const gentle = themeName !== "forest";
+    spawnPurifySparkles(target, 8);
+    if (gentle) {
+      target.purifying = false;
+      target.healed = true;
+      target.hopVx = 0;
+      target.hopVy = 0;
+      if (target.kind === "drone") {
+        target.homeY = Math.min(target.homeY, GROUND_Y - target.h);
+        target.y = target.homeY;
+      } else {
+        target.y = GROUND_Y - target.h;
+      }
+      target.wanderMin = Math.max(20, target.x - HEALED_WANDER_RANGE);
+      target.wanderMax = Math.min(levelWidth - 20, target.x + HEALED_WANDER_RANGE);
+      target.vx = HEALED_WANDER_SPEED * (Math.random() < 0.5 ? -1 : 1);
+      // Brutes only (per Jonathan's spec): redemption isn't permanent yet —
+      // it can relapse unless reinforced. Other critters are safe immediately.
+      target.reinforceShots = 0;
+      target.relapseTimer = target.kind === "brute" ? BRUTE_RELAPSE_TIME : null;
+      target.flashingRelapse = false;
+    } else {
+      target.purifying = true;
+      target.purifyDuration = PURIFY_DURATION;
+      target.purifyTimer = PURIFY_DURATION;
+      target.hopVy = -140;
+      target.hopVx = (target.x < player.x ? -1 : 1) * 45;
+    }
+    score += 30;
+    beep(1400, 0.2, "sine", 0.06);
+  }
+
+  // Shooting a critter that's ALREADY redeemed is a genuine mistake (from
+  // World 2 onward, where redeemed critters stick around to be shot at all):
+  // it plays the real hop-away/die sequence — this one doesn't come back —
+  // and Troll feels bad about it.
+  function killRedeemedCritter(target) {
+    spawnPurifySparkles(target, 6);
+    target.healed = false;
     target.purifying = true;
     target.purifyDuration = PURIFY_DURATION;
     target.purifyTimer = PURIFY_DURATION;
     target.hopVy = -140;
     target.hopVx = (target.x < player.x ? -1 : 1) * 45;
-    score += 30;
-    beep(1400, 0.2, "sine", 0.06);
+    target.finalDeath = true; // skip the purifying->healed conversion; gone for good
+    dialogueMessage = OOPS_LINES[Math.floor(Math.random() * OOPS_LINES.length)];
+    dialogueTimer = DIALOGUE_DURATION;
+    dialogueCooldown = DIALOGUE_COOLDOWN;
+    beep(200, 0.2, "sawtooth", 0.05);
+  }
+
+  // A bolt hitting a redeemed BRUTE while its relapse timer is still running
+  // reinforces the purification instead of hurting it — two such shots
+  // cancel the relapse for good. Returns true if the bolt should be consumed.
+  function reinforceBrute(target) {
+    if (target.kind !== "brute" || target.relapseTimer == null) return false;
+    target.reinforceShots += 1;
+    spawnPurifySparkles(target, 4);
+    beep(1000, 0.14, "sine", 0.05);
+    if (target.reinforceShots >= BRUTE_REINFORCE_SHOTS) {
+      target.relapseTimer = null;
+      target.flashingRelapse = false;
+    }
+    return true;
   }
 
   function purifyBoss(target) {
@@ -840,16 +1505,24 @@
     target.purifyTimer = BOSS_PURIFY_DURATION;
     target.hopVy = -90;
     target.hopVx = 0;
+    // Redemption, not a kill (canon, GAME_BIBLE §3/§5): he collapses, then
+    // sits up dejected but free of corruption — see drawEnemy()'s
+    // isBoss+purifying branch and the defeatPhase tick in update().
+    target.defeatPhase = "falling";
+    target.defeatPhaseT = BOSS_DEFEAT_FALL_TIME;
     score += 200;
     bossDefeated = true;
-    // Defeating him hands Troll all the energy he needs — walk to the portal
-    // (still dark/sealed) to trigger Sparkles beaming it in, see update().
+    // The Matrix fragment he was unwittingly hoarding while corrupted is
+    // released the moment he's purified — that's where Troll's full charge
+    // comes from, not violence. Walk to the portal (still dark/sealed) to
+    // trigger Sparkles beaming it in, see update().
     player.hornCharge = HORN_CHARGE_MAX;
     beep(1600, 0.4, "sine", 0.08);
   }
 
   function enterFinale() {
     state = "finale";
+    stopMusic();
     hud.classList.add("hidden");
     touchControls.classList.add("hidden");
     input.left = false;
@@ -858,6 +1531,15 @@
     const finalScore = Math.floor(score);
     const best = Math.max(finalScore, getHighscore());
     setHighscore(best);
+    // Realm-healed screen: per-boss-level title/quote, and if another world
+    // follows, the button carries the run onward instead of restarting.
+    const lvl = LEVELS[currentLevelIndex];
+    finaleNextLevel = currentLevelIndex + 1 < LEVELS.length ? currentLevelIndex + 1 : null;
+    if (lvl.finale) {
+      if (finaleTitleEl) finaleTitleEl.textContent = lvl.finale.title;
+      if (finaleQuoteEl) finaleQuoteEl.textContent = lvl.finale.quote;
+    }
+    finaleBtn.textContent = finaleNextLevel !== null ? "Onward to the next realm ▶" : "Play Again";
     [overlay, gameoverScreen].forEach((s) => s.classList.add("hidden"));
     finaleScreen.classList.remove("hidden");
   }
@@ -867,16 +1549,22 @@
   function damagePlayer(amount, sourceX) {
     if (player.hurtTimer > 0) return;
     if (artifactsAssembled && player.shield > 0) {
-      // The assembled artifacts' energy shield soaks the hit entirely —
-      // it drains and recharges like the horn's magical energy.
-      player.shield = Math.max(0, player.shield - amount);
+      // The shield soaks only what it actually holds; overflow damage goes
+      // through to health. (Previously ANY sliver of shield absorbed the
+      // whole hit — with passive regen that made Troll effectively
+      // immortal, since a sliver always regrew before the next hit.)
+      const absorbed = Math.min(player.shield, amount);
+      player.shield -= absorbed;
+      amount -= absorbed;
       player.shieldFlash = 0.4;
-      player.hurtTimer = 0.8;
-      player.vx = (player.x + player.w / 2 < sourceX ? -1 : 1) * 240;
-      player.vy = Math.min(player.vy, -200);
-      player.grounded = false;
-      beep(520, 0.18, "sine", 0.06);
-      return;
+      if (amount <= 0) {
+        player.hurtTimer = 0.8;
+        player.vx = (player.x + player.w / 2 < sourceX ? -1 : 1) * 240;
+        player.vy = Math.min(player.vy, -200);
+        player.grounded = false;
+        beep(520, 0.18, "sine", 0.06);
+        return;
+      }
     }
     player.hp -= amount;
     player.hurtTimer = HURT_INVULN;
@@ -927,9 +1615,10 @@
   // where there is nothing to stand on (e.g. past a branch's bare tip).
   function platformSurfaceY(p, cx) {
     const t = (cx - p.x) / p.w;
+    const sink = p.sinkOff || 0; // sinking-sand platforms ride lower underfoot
     if (p.bridge) {
       if (t < 0 || t > 1) return null;
-      return p.y + Math.sin(Math.PI * t) * BRIDGE_SAG;
+      return p.y + sink + Math.sin(Math.PI * t) * BRIDGE_SAG;
     }
     if (p.groundBump) {
       if (t < 0 || t > 1) return null;
@@ -937,14 +1626,15 @@
     }
     // branch platform
     if (t < BRANCH_SOLID_MIN || t > BRANCH_SOLID_MAX) return null;
-    if (!(branchTile.complete && branchTile.naturalWidth)) return p.y;
-    const drawH = branchTile.naturalHeight * (p.w / branchTile.naturalWidth);
+    const branch = theme().branch;
+    if (!(branch.complete && branch.naturalWidth)) return p.y + sink;
+    const drawH = branch.naturalHeight * (p.w / branch.naturalWidth);
     const u =
       ((t - BRANCH_SOLID_MIN) / (BRANCH_SOLID_MAX - BRANCH_SOLID_MIN)) *
       (BRANCH_PROFILE.length - 1);
     const i = Math.min(BRANCH_PROFILE.length - 2, Math.floor(u));
     const frac = BRANCH_PROFILE[i] + (BRANCH_PROFILE[i + 1] - BRANCH_PROFILE[i]) * (u - i);
-    return p.y + (frac - BRANCH_ANCHOR_FRAC) * drawH + 3;
+    return p.y + sink + (frac - BRANCH_ANCHOR_FRAC) * drawH + 3;
   }
 
   function updatePlayerVertical(dt) {
@@ -960,15 +1650,20 @@
     else if (player.fallStartY == null) player.fallStartY = player.y;
 
     let landed = false;
+    player.standPlatform = null; // re-detected every frame (drives sinking sand)
     if (wasFalling) {
       for (const p of platforms) {
         // Land only when Troll's centre is over solid surface — overhanging
         // the edge read as floating in mid-air.
         const cx = player.x + player.w / 2;
         const surfY = platformSurfaceY(p, cx);
-        if (surfY !== null && prevFootY <= surfY + 6 && footY >= surfY) {
+        // Sinking platforms move away underfoot faster than one frame of
+        // gravity, so give the re-land test their per-frame travel as slack.
+        const slack = p.sink ? 6 + SINK_RATE * dt + 2 : 6;
+        if (surfY !== null && prevFootY <= surfY + slack && footY >= surfY) {
           player.y = surfY - player.h;
           landed = true;
+          player.standPlatform = p;
           break;
         }
       }
@@ -1012,6 +1707,32 @@
     for (const o of obstacles) {
       if (o.hitFlash > 0) o.hitFlash = Math.max(0, o.hitFlash - dt);
       if (o.purifying) continue;
+      if (o.healed) {
+        // Healed critters just potter about their little patch — no aggro,
+        // no collision, no projectiles. Drones bob gently in the air.
+        o.x += o.vx * dt;
+        if (o.x < o.wanderMin) o.vx = Math.abs(o.vx);
+        else if (o.x + o.w > o.wanderMax) o.vx = -Math.abs(o.vx);
+        if (o.kind === "drone")
+          o.y = o.homeY + Math.sin(elapsed * 1.5 + o.x * 0.01) * 10;
+        // Brutes only: redemption isn't locked in until reinforced — he
+        // starts flashing as the relapse timer runs low, then fully
+        // re-corrupts (back to a live, hostile brute) if Troll never shoots
+        // him again in time.
+        if (o.relapseTimer != null) {
+          o.relapseTimer -= dt;
+          o.flashingRelapse = o.relapseTimer <= BRUTE_RELAPSE_FLASH_LEAD;
+          if (o.relapseTimer <= 0) {
+            o.healed = false;
+            o.hp = o.hpMax;
+            o.relapseTimer = null;
+            o.flashingRelapse = false;
+            o.reinforceShots = 0;
+            beep(160, 0.3, "sawtooth", 0.06);
+          }
+        }
+        continue;
+      }
       if (o.kind === "drone") {
         o.guarding =
           artifactThreat && Math.abs(o.x - artifact.x) < ARTIFACT_GUARD_RANGE;
@@ -1050,7 +1771,6 @@
                 r: 10,
                 noGravity: true,
                 bossBolt: true,
-                damage: BOSS_BOLT_DAMAGE,
               });
               o.aimDown = dy > 50;
               o.shootPhase = "fire";
@@ -1093,11 +1813,16 @@
         }
       } else if (
         // Ground critters aggro too: when Troll is near and roughly at their
-        // height, they abandon the patrol route and come at him.
+        // height, they abandon the patrol route and come at him. Gated to
+        // Troll actually being at ground level (not just "close enough" per
+        // the old o.y-60 margin, which was only ~2px of slack against
+        // TIER1_Y platforms — Troll standing on a platform above a brute
+        // would flicker in and out of aggro range every frame, flipping the
+        // sprite's facing rapidly and reading as a self-mirroring glitch).
         GROUND_CHASE_SPEED[o.kind] &&
         !intro &&
         Math.abs(player.x + player.w / 2 - (o.x + o.w / 2)) < GROUND_AGGRO_RANGE &&
-        player.y + player.h > o.y - 60
+        player.y + player.h > GROUND_Y - 10
       ) {
         const dir = Math.sign(player.x + player.w / 2 - (o.x + o.w / 2)) || 1;
         o.x += dir * GROUND_CHASE_SPEED[o.kind] * dt;
@@ -1117,8 +1842,32 @@
         o.y += (o.homeY - o.y) * Math.min(1, dt * 2.5);
         o.swoopWait -= dt;
         if (o.swoopWait <= 0) {
-          if (Math.abs(player.x - o.x) < 420 && !intro) o.swooping = DRONE_SWOOP_TIME;
+          const swoopRange = themeName === "forest" ? DRONE_SWOOP_TRIGGER_RANGE_WORLD1 : DRONE_SWOOP_TRIGGER_RANGE;
+          if (Math.abs(player.x - o.x) < swoopRange && !intro) o.swooping = DRONE_SWOOP_TIME;
           else o.swoopWait = 2;
+        }
+      }
+      if (o.kind === "brute" && !o.isBoss) {
+        // Ground-bound: a brute can't follow Troll across a gap or up onto a
+        // platform, so whenever Troll's in range but not close enough to
+        // just walk into (whether that's overhead, across a gap at the same
+        // height, or anywhere else out of reach), it lobs a rock instead
+        // (same ballistic-arc aim as the spitter's lob — solves for the
+        // horizontal speed that lands wherever Troll currently is, so it
+        // works the same whether he's above, level, or below).
+        o.rockTimer -= dt;
+        const horizDist = Math.abs(player.x + player.w / 2 - (o.x + o.w / 2));
+        const onScreen = o.x - cameraX > -40 && o.x - cameraX < W + 40;
+        if (horizDist > 80 && horizDist < BRUTE_ROCK_RANGE && o.rockTimer <= 0 && onScreen) {
+          const ROCK_VY = -520;
+          const ROCK_GRAVITY = GRAVITY * 0.55;
+          const airtime = (-2 * ROCK_VY) / ROCK_GRAVITY;
+          const targetX = player.x + player.w / 2;
+          const originX = o.x + o.w / 2;
+          const vx = Math.max(-260, Math.min(260, (targetX - originX) / airtime));
+          projectiles.push({ x: originX, y: o.y - o.h * 0.3, vx, vy: ROCK_VY, r: 11, rock: true });
+          o.rockTimer = BRUTE_ROCK_COOLDOWN + Math.random();
+          beep(300, 0.1, "sawtooth", 0.04);
         }
       }
       if (o.kind === "spitter") {
@@ -1144,10 +1893,14 @@
 
   function update(dt) {
     elapsed += dt;
+    if (!exitPrimed && exitPoint && Math.abs(player.x - exitPoint.x) > EXIT_PRIME_DISTANCE)
+      exitPrimed = true;
+    if (!backExitPrimed && backExitPoint && Math.abs(player.x - backExitPoint.x) > EXIT_PRIME_DISTANCE)
+      backExitPrimed = true;
 
     if (intro) {
       intro.t += dt;
-      if (intro.t >= INTRO_END) intro = null;
+      if (intro.t >= (intro.end || INTRO_END)) intro = null;
     }
 
     if (pendingFinaleAt !== null && elapsed >= pendingFinaleAt) {
@@ -1158,6 +1911,13 @@
 
     updatePlayerMovement(dt);
     updatePlayerVertical(dt);
+    // Sinking sand: gives way underfoot, springs back when left alone.
+    for (const p of platforms) {
+      if (!p.sink) continue;
+      if (player.standPlatform === p)
+        p.sinkOff = Math.min(SINK_MAX, p.sinkOff + SINK_RATE * dt);
+      else p.sinkOff = Math.max(0, p.sinkOff - SINK_RECOVER * dt);
+    }
     updateEnemies(dt);
     player.hornCharge = Math.min(HORN_CHARGE_MAX, player.hornCharge + HORN_REGEN_PER_SEC * dt);
     if (artifactsAssembled)
@@ -1184,19 +1944,46 @@
     blasts.forEach((b) => (b.age += dt));
     blasts = blasts.filter((b) => b.age < b.life);
 
-    // Purified critters hop away over PURIFY_DURATION instead of vanishing.
+    // Purified critters hop for PURIFY_DURATION, then SETTLE AND STAY —
+    // healed, harmless, wandering (King Angus, World 2: "ye're shootin'
+    // those poor critters too hard, laddie"). Only the boss still vanishes
+    // into the finale cut.
     for (const o of obstacles) {
       if (!o.purifying) continue;
       o.purifyTimer -= dt;
+      if (o.isBoss && o.defeatPhase === "falling") {
+        o.defeatPhaseT -= dt;
+        if (o.defeatPhaseT <= 0) o.defeatPhase = "dejected";
+      }
       o.hopVy += GRAVITY * 0.35 * dt;
       o.y += o.hopVy * dt;
       o.x += o.hopVx * dt;
+      // World 1 (forest) critters never take the "gentle" branch of purify()
+      // in the first place (see purify()) — they're meant to actually
+      // disappear once their hop-away animation finishes, not settle into a
+      // permanent wandering "healed" critter. Only World 2+ critters (and
+      // never a finalDeath/boss one) convert to healed here.
+      if (o.purifyTimer <= 0 && !o.isBoss && !o.finalDeath && themeName !== "forest") {
+        o.purifying = false;
+        o.healed = true;
+        o.hopVx = 0;
+        o.hopVy = 0;
+        if (o.kind === "drone") {
+          o.homeY = Math.min(o.homeY, GROUND_Y - o.h);
+          o.y = o.homeY;
+        } else {
+          o.y = GROUND_Y - o.h;
+        }
+        o.wanderMin = Math.max(20, o.x - HEALED_WANDER_RANGE);
+        o.wanderMax = Math.min(levelWidth - 20, o.x + HEALED_WANDER_RANGE);
+        o.vx = HEALED_WANDER_SPEED * (Math.random() < 0.5 ? -1 : 1);
+      }
     }
     obstacles = obstacles.filter((o) => !o.purifying || o.purifyTimer > 0);
 
     const hitboxPad = 10;
     for (const o of obstacles) {
-      if (o.purifying) continue;
+      if (o.purifying || o.healed) continue;
       if (
         player.x + hitboxPad < o.x + o.w &&
         player.x + player.w - hitboxPad > o.x &&
@@ -1216,7 +2003,15 @@
       b.x += b.vx * dt;
       for (const o of obstacles) {
         if (o.purifying) continue;
-        if (b.x + b.r > o.x && b.x - b.r < o.x + o.w && b.y + b.r > o.y && b.y - b.r < o.y + o.h) {
+        if (!(b.x + b.r > o.x && b.x - b.r < o.x + o.w && b.y + b.r > o.y && b.y - b.r < o.y + o.h))
+          continue;
+        b.hit = true;
+        if (o.healed) {
+          // Already redeemed: a brute mid-relapse-timer gets reinforced
+          // instead of hurt; anything else (or a brute past that window) is
+          // a genuine mistake — the real die/hop-off-screen sequence.
+          if (!reinforceBrute(o)) killRedeemedCritter(o);
+        } else {
           o.hp -= 1;
           if (o.hp <= 0) {
             if (o.isBoss) purifyBoss(o);
@@ -1225,9 +2020,8 @@
             o.hitFlash = 0.18;
             beep(700, 0.1, "triangle", 0.05);
           }
-          b.hit = true;
-          break;
         }
+        break;
       }
     }
     bolts = bolts.filter((b) => !b.hit && b.x > -50 && b.x < levelWidth + 50);
@@ -1241,7 +2035,15 @@
       const dy = player.y + player.h / 2 - p.y;
       if (Math.hypot(dx, dy) < p.r + projPad) {
         p.hit = true;
-        damagePlayer(p.damage || SPIT_DAMAGE, p.x);
+        let dmg = p.damage || SPIT_DAMAGE;
+        if (p.bossBolt) {
+          // Scaled to Troll's CURRENT life, not a flat number: a brutal 3/4
+          // of what he has left, unless the shield rune tunes his ward down
+          // to a mere 1/10 (artifactsAssembled == the rune is fused).
+          const frac = artifactsAssembled ? BOSS_BOLT_DAMAGE_FRAC_SHIELDED : BOSS_BOLT_DAMAGE_FRAC;
+          dmg = Math.max(1, Math.round(player.hp * frac));
+        }
+        damagePlayer(dmg, p.x);
         if (state !== "playing") return;
       }
     }
@@ -1256,9 +2058,17 @@
       const dy = player.y + player.h / 2 - c.y;
       if (Math.hypot(dx, dy) < CANDY_PICKUP_R) {
         c.taken = true;
-        score += 15;
-        player.hornCharge = Math.min(HORN_CHARGE_MAX, player.hornCharge + 1);
-        beep(880, 0.1, "sine", 0.05);
+        levelCandyState[currentLevelIndex][c.sourceIndex] = true;
+        if (c.big) {
+          score += CANDY_BIG_SCORE;
+          player.hornCharge = Math.min(HORN_CHARGE_MAX, player.hornCharge + HORN_CHARGE_MAX * CANDY_BIG_CHARGE_FRAC);
+          beep(1100, 0.16, "sine", 0.07);
+        } else {
+          score += 15;
+          // A candy is 1/10 of a full Matrix charge.
+          player.hornCharge = Math.min(HORN_CHARGE_MAX, player.hornCharge + HORN_CHARGE_MAX / 10);
+          beep(880, 0.1, "sine", 0.05);
+        }
       }
     }
     candies = candies.filter((c) => !c.taken);
@@ -1269,6 +2079,7 @@
       const dy = player.y + player.h / 2 - h.y;
       if (Math.hypot(dx, dy) < CANDY_PICKUP_R) {
         h.taken = true;
+        levelHeartState[currentLevelIndex][h.sourceIndex] = true;
         score += 40;
         player.hp = Math.min(PLAYER_MAX_HP, player.hp + HEART_HEAL);
         beep(980, 0.25, "sine", 0.07);
@@ -1359,10 +2170,21 @@
     if (dialogueCooldown > 0) dialogueCooldown -= dt;
     if (portal && bossDefeated) unicornEmerge += dt;
 
+    if (backExitPoint && backExitPrimed) {
+      const overlapBack =
+        player.x + player.w - 20 > backExitPoint.x - 50 &&
+        player.x + 20 < backExitPoint.x + 50 &&
+        player.y + player.h > backExitPoint.y - 130;
+      if (overlapBack) {
+        loadLevel(currentLevelIndex - 1, true);
+        return; // level state was just rebuilt under us
+      }
+    }
+
     const currentLevel = LEVELS[currentLevelIndex];
     if (currentLevel.boss) {
       updatePortalActivation(dt);
-    } else if (exitPoint) {
+    } else if (exitPoint && exitPrimed) {
       const overlap =
         player.x + player.w - 20 > exitPoint.x - 50 &&
         player.x + 20 < exitPoint.x + 50 &&
@@ -1710,7 +2532,7 @@
 
   // --- Rendering -----------------------------------------------------------
   function drawParallaxLayers() {
-    forestLayers.forEach(({ img, mult }) => {
+    theme().layers.forEach(({ img, mult }) => {
       if (!img.complete || !img.naturalWidth) return;
       // "Cover" scale (like CSS background-size:cover): guarantees tileW is
       // never narrower than the canvas, which some of these crops otherwise
@@ -1731,7 +2553,7 @@
   const GROUND_VISUAL_H = BAND_H + 60; // extends past the canvas bottom for a natural lower edge
 
   function buildGroundStrip(width) {
-    const pool = groundTilePool.filter((t) => t.img.complete && t.img.naturalWidth);
+    const pool = theme().groundPool.filter((t) => t.img.complete && t.img.naturalWidth);
     if (pool.length === 0) return null;
     const strip = [];
     const bumps = [];
@@ -1765,21 +2587,34 @@
   }
 
   function drawGroundBand() {
-    if (!groundStrip || groundStripLevelWidth !== levelWidth) {
+    if (!groundStrip || groundStripLevelWidth !== levelWidth || groundStripTheme !== themeName) {
       const built = buildGroundStrip(levelWidth);
       if (built) {
         groundStrip = built.strip;
         groundStripLevelWidth = levelWidth;
+        groundStripTheme = themeName;
         platforms.push(...built.bumps);
       }
     }
     if (groundStrip) {
+      // Structural backstop (2026-07-18, placeholder pending real seamless
+      // "ground-fill" art per world): the shelf art itself is painted as
+      // floating-island scenery — grass cap over a rounded rocky/rooty
+      // underside on a transparent background (ground-2.png even has a hole
+      // clean through the middle) — so without this, gaps between/under
+      // chunks show the parallax sky straight through. A flat structural
+      // fill drawn first, in a colour pulled from each chunk's own rock/root
+      // palette, closes every gap so the band reads as one continuous mass.
+      // Swap for a real seamless vertical earth/rock texture later; nothing
+      // else about this function needs to change when that happens.
+      ctx.fillStyle = theme().groundFillColor;
+      ctx.fillRect(0, GROUND_Y, levelWidth, H - GROUND_Y);
       groundStrip.forEach((seg) => ctx.drawImage(seg.img, seg.x, seg.y, seg.w, seg.h));
     } else {
       // Fallback while art loads: solid fill + a boundary line so the
       // walkable surface is still readable (the real ground art needs no
       // such line — it draws its own edge).
-      ctx.fillStyle = "#e8d9b0";
+      ctx.fillStyle = theme().fallbackGround;
       ctx.fillRect(0, GROUND_Y, levelWidth, BAND_H);
       ctx.fillStyle = "#203252";
       ctx.fillRect(0, GROUND_Y, levelWidth, 4);
@@ -1881,8 +2716,23 @@
   }
 
   function drawEnemy(o) {
-    let sprite = o.purifying ? purifiedSprites[o.kind] || enemySprites[o.kind] : enemySprites[o.kind];
+    let sprite;
     let noMirror = false;
+    if (o.isBoss && o.purifying) {
+      // Redeemed, not destroyed (canon) — collapse pose, then the dejected
+      // sit-up pose, never the old enlarged forest-guardian "brute" art.
+      const fallback = purifiedSprites[o.kind] || enemySprites[o.kind];
+      sprite =
+        o.defeatPhase === "dejected"
+          ? sauroDejectedImg || sauroDefeatedImg || fallback
+          : sauroDefeatedImg || fallback;
+      noMirror = true;
+    } else {
+      sprite =
+        o.purifying || o.healed
+          ? purifiedSprites[o.kind] || enemySprites[o.kind]
+          : enemySprites[o.kind];
+    }
     if (o.isBoss && !o.purifying && sauroSprites.idle) {
       // Real Saurosapien pose art. Directions are baked into the art, so the
       // vx-based mirroring below is skipped entirely.
@@ -1896,7 +2746,7 @@
       else pose = `ready_to_shoot_${dir}`;
       sprite = sauroSprites[pose] || sauroSprites.idle;
       noMirror = true;
-    } else if (o.kind === "brute" && !o.purifying) {
+    } else if (o.kind === "brute" && !o.purifying && !o.healed) {
       // Brute action poses: arms up mid-roar (boss fallback while the
       // Saurosapien art loads), arms forward while actively chasing.
       const roaring = o.isBoss && elapsed % 4 < 0.3;
@@ -1917,6 +2767,12 @@
       // Brief white-hot flash on a non-lethal bolt hit so multi-hp enemies
       // visibly register damage.
       if (o.hitFlash > 0) ctx.filter = "brightness(2.1)";
+      // Relapsing brute: corruption visibly creeping back in before he fully
+      // re-corrupts, unless Troll reinforces him in time.
+      else if (o.flashingRelapse) {
+        const pulse = Math.sin(elapsed * 14) * 0.5 + 0.5;
+        ctx.filter = `brightness(${1 + pulse * 0.5}) saturate(${1 - pulse * 0.6})`;
+      }
       // No arm/mouth animation frames exist for the boss (single static
       // painting) — a procedural breathing pulse + periodic "roar" lunge is
       // the honest approximation without new art. Real limb animation would
@@ -1947,7 +2803,7 @@
         ctx.fillRect(o.x, o.y - 16, o.w, 8);
         ctx.fillStyle = "#dcc48f";
         ctx.fillRect(o.x, o.y - 16, o.w * pct, 8);
-      } else if (!o.purifying && o.hpMax > 1 && o.hp < o.hpMax) {
+      } else if (!o.purifying && !o.healed && o.hpMax > 1 && o.hp < o.hpMax) {
         // Small health bar once a multi-hit enemy has taken damage.
         const pct = Math.max(0, o.hp / o.hpMax);
         ctx.fillStyle = "rgba(20,20,30,0.55)";
@@ -2011,6 +2867,35 @@
       ctx.restore();
       return;
     }
+    if (p.rock) {
+      // Lumpy brown/grey chunk (a brute's thrown rock), tumbling in flight —
+      // an irregular polygon rather than a plain circle so it actually
+      // reads as a rock rather than reusing the spitter's green glob look.
+      p.rockSpin = (p.rockSpin || 0) + 0.12;
+      ctx.rotate(p.rockSpin);
+      ctx.fillStyle = "#6b5d4f";
+      ctx.strokeStyle = "#3a322a";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      const bumps = 7;
+      for (let i = 0; i < bumps; i++) {
+        const a = (Math.PI * 2 * i) / bumps;
+        const r = p.r * (i % 2 === 0 ? 1 : 0.72);
+        const px = Math.cos(a) * r;
+        const py = Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "rgba(150, 150, 145, 0.55)";
+      ctx.beginPath();
+      ctx.arc(-p.r * 0.25, -p.r * 0.3, p.r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
     ctx.fillStyle = "#6b8a3f";
     ctx.beginPath();
     ctx.arc(0, 0, p.r, 0, Math.PI * 2);
@@ -2018,6 +2903,36 @@
     ctx.fillStyle = "rgba(220, 230, 190, 0.5)";
     ctx.beginPath();
     ctx.arc(-p.r * 0.35, -p.r * 0.35, p.r * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Placeholder connector (2026-07-18) so a plain floating platform reads as
+  // "resting on a trunk/pillar rooted in the ground" rather than debris
+  // hanging in mid-air — a tapered, per-theme-tinted shape from the
+  // platform's underside down to the ground line. Bridges and sinking-sand
+  // platforms are their own distinct floating mechanics and don't get one.
+  // Swap for a real seamlessly-tiling trunk/pillar sprite later (see the
+  // terrain-redesign plan) — nothing else about the call site needs to change.
+  function drawPlatformConnector(p) {
+    if (p.bridge || p.sink || p.groundBump) return;
+    const topY = p.y + p.h * 0.5;
+    if (GROUND_Y <= topY) return;
+    const cx = p.x + p.w / 2;
+    const topW = Math.min(p.w * 0.34, 60);
+    const botW = Math.min(p.w * 0.5, 90);
+    const [c0, c1] = theme().connectorColors;
+    ctx.save();
+    const grad = ctx.createLinearGradient(0, topY, 0, GROUND_Y);
+    grad.addColorStop(0, c0);
+    grad.addColorStop(1, c1);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(cx - topW / 2, topY);
+    ctx.lineTo(cx + topW / 2, topY);
+    ctx.lineTo(cx + botW / 2, GROUND_Y);
+    ctx.lineTo(cx - botW / 2, GROUND_Y);
+    ctx.closePath();
     ctx.fill();
     ctx.restore();
   }
@@ -2063,12 +2978,14 @@
       ctx.restore();
       return;
     }
-    if (branchTile.complete && branchTile.naturalWidth) {
-      const drawH = branchTile.naturalHeight * (p.w / branchTile.naturalWidth);
+    const branch = theme().branch;
+    if (branch.complete && branch.naturalWidth) {
+      const drawH = branch.naturalHeight * (p.w / branch.naturalWidth);
       // 0.365 = measured alpha-scan row of the branch art's walkable surface;
       // +3px swallows the troll sprite's own transparent bottom padding, so
       // his feet visually touch the moss instead of hovering above it.
-      ctx.drawImage(branchTile, p.x, p.y - drawH * 0.365 + 3, p.w, drawH);
+      const py = p.y + (p.sinkOff || 0);
+      ctx.drawImage(branch, p.x, py - drawH * 0.365 + 3, p.w, drawH);
       return;
     }
     ctx.save();
@@ -2205,11 +3122,23 @@
     }
   }
 
-  function drawTreeExit(p) {
-    if (treeExitImg.complete && treeExitImg.naturalWidth) {
+  // mirrored=true draws the same stump art flipped horizontally — used for
+  // the "way back" stump near the start of each level, so it visually reads
+  // as the far side of the very same tree the player just walked out of.
+  function drawTreeExit(p, mirrored) {
+    const exitImg = theme().treeExit;
+    if (exitImg.complete && exitImg.naturalWidth) {
       const h = 190;
-      const w = h * (treeExitImg.naturalWidth / treeExitImg.naturalHeight);
-      ctx.drawImage(treeExitImg, p.x - w / 2, p.y - h, w, h);
+      const w = h * (exitImg.naturalWidth / exitImg.naturalHeight);
+      if (mirrored) {
+        ctx.save();
+        ctx.translate(p.x, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(exitImg, -w / 2, p.y - h, w, h);
+        ctx.restore();
+      } else {
+        ctx.drawImage(exitImg, p.x - w / 2, p.y - h, w, h);
+      }
       return;
     }
     ctx.save();
@@ -2405,9 +3334,11 @@
   // delivers the quest, fades; Troll grumbles his acceptance.
   function drawIntro() {
     const t = intro.t;
+    const kingOut = intro.kingOut || INTRO_KING_OUT;
+    const introEnd = intro.end || INTRO_END;
     const kx = player.x + 250; // king's centre x
     const kFadeIn = Math.min(1, t / INTRO_KING_IN);
-    const kFadeOut = t > INTRO_KING_OUT ? Math.max(0, 1 - (t - INTRO_KING_OUT) / 0.8) : 1;
+    const kFadeOut = t > kingOut ? Math.max(0, 1 - (t - kingOut) / 0.8) : 1;
     const kAlpha = kFadeIn * kFadeOut;
 
     if (kAlpha > 0) {
@@ -2417,14 +3348,15 @@
       // placeholder is reserved for a permanent load failure.
       const kingStillLoading = !hasKingArt && !kingImg.permanentlyFailed;
       ctx.save();
-      // Mystical swirl behind the procedural placeholder only — Jonathan's
-      // King Angus art carries its own baked-in portal glow.
-      if (!hasKingArt && portalSwirlImg.complete && portalSwirlImg.naturalWidth) {
+      // King Angus appears IN a spinning vortex (Jonathan, 2026-07-17): the
+      // portal swirl always draws behind him — bigger when framing the real
+      // art, smaller for the placeholder.
+      if (portalSwirlImg.complete && portalSwirlImg.naturalWidth) {
         ctx.globalAlpha = kAlpha * 0.85;
         ctx.save();
-        ctx.translate(kx, GROUND_Y - 80);
+        ctx.translate(kx, GROUND_Y - (hasKingArt ? 105 : 80));
         ctx.rotate(elapsed * 1.2);
-        const sw = 180;
+        const sw = hasKingArt ? 300 : 180;
         ctx.drawImage(portalSwirlImg, -sw / 2, -sw / 2, sw, sw);
         ctx.restore();
       }
@@ -2480,12 +3412,12 @@
       ctx.restore();
     }
 
-    if (t > INTRO_KING_IN && t < INTRO_KING_OUT) {
+    if (t > INTRO_KING_IN && t < kingOut) {
       const a = Math.min(1, (t - INTRO_KING_IN) / 0.4) * kFadeOut;
-      drawBubble(kx, GROUND_Y - 215, KING_LINE, 300, a);
-    } else if (t > INTRO_KING_OUT + 0.4) {
-      const a = Math.min(1, (t - INTRO_KING_OUT - 0.4) / 0.4, (INTRO_END - t) / 0.4);
-      drawBubble(player.x + player.w / 2, player.y - 24, TROLL_INTRO_LINE, 300, a);
+      drawBubble(kx, GROUND_Y - 215, intro.king || KING_LINE, 300, a);
+    } else if (t > kingOut + 0.4) {
+      const a = Math.min(1, (t - kingOut - 0.4) / 0.4, (introEnd - t) / 0.4);
+      drawBubble(player.x + player.w / 2, player.y - 24, intro.troll || TROLL_INTRO_LINE, 300, a);
     }
 
     // skip hint (screen space, unaffected by camera — camera is 0 here anyway)
@@ -2498,7 +3430,15 @@
     ctx.restore();
   }
 
+  // "big" candies (Matrix Shards) are a richer, rarer pickup — worth more
+  // score and more charge than a regular candy (see CANDY_BIG_CHARGE_FRAC in
+  // the pickup handling in update()). Procedural for now, same as regular
+  // candy — a violet six-point shard instead of the amber diamond, distinct
+  // at a glance. Real art can replace this the same way the regular candy
+  // eventually could (drawCandy stays the single hook to swap in a sprite).
+  const CANDY_BIG_GLOW_COLOR = "144, 120, 220";
   function drawCandy(c) {
+    const glowColor = c.big ? CANDY_BIG_GLOW_COLOR : "220, 196, 143";
     const dx = player.x + player.w / 2 - c.x;
     const dy = player.y + player.h / 2 - c.y;
     const dist = Math.hypot(dx, dy);
@@ -2509,8 +3449,8 @@
       ctx.save();
       ctx.translate(c.x, c.y);
       const grad = ctx.createRadialGradient(0, 0, c.r * 0.4, 0, 0, glowR);
-      grad.addColorStop(0, `rgba(220, 196, 143, ${0.55 * proximity * pulse})`);
-      grad.addColorStop(1, "rgba(220, 196, 143, 0)");
+      grad.addColorStop(0, `rgba(${glowColor}, ${0.55 * proximity * pulse})`);
+      grad.addColorStop(1, `rgba(${glowColor}, 0)`);
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.arc(0, 0, glowR, 0, Math.PI * 2);
@@ -2522,22 +3462,44 @@
     ctx.translate(c.x, c.y);
     const bob = Math.sin((elapsed + c.x * 0.05) * 4) * 4;
     ctx.translate(0, bob);
-    ctx.fillStyle = "#9a7840";
-    ctx.beginPath();
-    ctx.moveTo(0, -c.r);
-    ctx.lineTo(c.r, 0);
-    ctx.lineTo(0, c.r);
-    ctx.lineTo(-c.r, 0);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = "#dcc48f";
-    ctx.beginPath();
-    ctx.moveTo(0, -c.r * 0.65);
-    ctx.lineTo(c.r * 0.65, 0);
-    ctx.lineTo(0, c.r * 0.65);
-    ctx.lineTo(-c.r * 0.65, 0);
-    ctx.closePath();
-    ctx.fill();
+    if (c.big) {
+      // Six-point shard, slow spin, brighter core — reads as "special" at a
+      // glance even before real art exists.
+      ctx.rotate(Math.sin(elapsed * 1.2) * 0.25);
+      ctx.fillStyle = "#4a2f7a";
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = (Math.PI / 3) * i - Math.PI / 2;
+        const r = i % 2 === 0 ? c.r : c.r * 0.55;
+        const px = Math.cos(a) * r;
+        const py = Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#c9a8ff";
+      ctx.beginPath();
+      ctx.arc(0, 0, c.r * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = "#9a7840";
+      ctx.beginPath();
+      ctx.moveTo(0, -c.r);
+      ctx.lineTo(c.r, 0);
+      ctx.lineTo(0, c.r);
+      ctx.lineTo(-c.r, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#dcc48f";
+      ctx.beginPath();
+      ctx.moveTo(0, -c.r * 0.65);
+      ctx.lineTo(c.r * 0.65, 0);
+      ctx.lineTo(0, c.r * 0.65);
+      ctx.lineTo(-c.r * 0.65, 0);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
   }
 
@@ -2692,6 +3654,7 @@
     ctx.save();
     ctx.translate(-cameraX, 0);
     drawGroundBand();
+    platforms.forEach(drawPlatformConnector);
     platforms.forEach(drawPlatform);
     if (portal) {
       // Sparkles hides BEHIND the portal while the Saurosapien guards it
@@ -2704,6 +3667,12 @@
     } else if (exitPoint) {
       drawTreeExit(exitPoint);
     }
+    // Not mirrored (2026-07-18, corrected): the art's tunnel recedes toward
+    // the light on its own right side already — mirroring flipped that onto
+    // the left, reading as the entrance "facing the wrong way". Same
+    // orientation as the forward exit; Troll now spawns on its lit/right
+    // side instead, so it reads as one continuous tree seen consistently.
+    if (backExitPoint) drawTreeExit(backExitPoint);
     if (artifact && !artifact.taken) drawArtifact(artifact);
     if (station) drawStation();
     obstacles.forEach(drawEnemy);
@@ -2742,9 +3711,10 @@
       ctx.drawImage(unicornSitImg, portalX + 60, GROUND_Y - uh + UNICORN_FOOT_SINK, uw, uh);
     }
 
-    // Shows whichever creature the boss actually was (purifiedSprites.brute),
-    // so the finale always matches the fight that just happened.
-    const redeemedBoss = purifiedSprites.brute || redeemedLizard;
+    // The redeemed Saurosapien Captain, dejected but freed of corruption —
+    // matches the same defeat art used in-level (drawEnemy's isBoss+purifying
+    // branch), not the old enlarged forest-guardian "brute" placeholder.
+    const redeemedBoss = sauroDejectedImg || purifiedSprites.brute || redeemedLizard;
     if (redeemedBoss.complete && redeemedBoss.naturalWidth) {
       const rh = 105;
       const rw = rh * (redeemedBoss.naturalWidth / redeemedBoss.naturalHeight);
@@ -2766,7 +3736,7 @@
     if (state === "playing") {
       update(dt);
       hudScore.textContent = Math.floor(score);
-      if (hudLevel) hudLevel.textContent = `Level ${currentLevelIndex + 1}/${LEVELS.length}`;
+      if (hudLevel) hudLevel.textContent = LEVELS[currentLevelIndex].name;
       // Always visible — it doubles as the rune-pieces viewer button.
       hudArtifact.classList.remove("hidden-slot");
       hudArtifact.classList.toggle("found", artifactCollected);
@@ -2810,15 +3780,31 @@
     });
   }
 
+  // Dev/playtest shortcut: ?level=2-1 (level-name prefix) or ?level=5 (raw
+  // index) starts new games at that level instead of 1-1.
+  const startLevelIndex = (() => {
+    const v = new URLSearchParams(location.search).get("level");
+    if (!v) return 0;
+    const byName = LEVELS.findIndex((l) => l.name.toLowerCase().startsWith(v.toLowerCase()));
+    if (byName >= 0) return byName;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= 0 && n < LEVELS.length ? n : 0;
+  })();
+
   function startGame() {
     enterMobileFullscreen();
     player = null;
     score = 0;
     artifactsTaken = LEVELS.map(() => false);
+    levelEnemyState = LEVELS.map(() => null);
+    levelCandyState.forEach((arr) => arr.fill(false));
+    levelHeartState.forEach((arr) => arr.fill(false));
     artifactsAssembled = false;
+    introSeen = {};
     shieldMeter.classList.add("hidden");
-    loadLevel(0);
-    intro = { t: 0 };
+    // Skipping straight into World 2 implies World 1's rune is already fused.
+    if (startLevelIndex >= 5) artifactsAssembled = true;
+    loadLevel(startLevelIndex);
     state = "playing";
     showScreen(null);
     hud.classList.remove("hidden");
@@ -2837,6 +3823,7 @@
 
   function gameOver() {
     state = "gameover";
+    stopMusic();
     beep(160, 0.35, "sawtooth", 0.06);
     hud.classList.add("hidden");
     touchControls.classList.add("hidden");
@@ -2863,19 +3850,34 @@
 
   startBtn.addEventListener("click", startGame);
   retryBtn.addEventListener("click", retryLevel);
-  finaleBtn.addEventListener("click", startGame);
+  finaleBtn.addEventListener("click", () => {
+    // Mid-run finale (a realm healed, more to go): continue the same run
+    // into the next world. Final finale: back to a fresh game.
+    if (finaleNextLevel !== null) {
+      enterMobileFullscreen();
+      loadLevel(finaleNextLevel);
+      state = "playing";
+      showScreen(null);
+      hud.classList.remove("hidden");
+      if (isTouchDevice) touchControls.classList.remove("hidden");
+    } else {
+      startGame();
+    }
+  });
 
   // --- Settings screen (pauses the game while open) ------------------------
   let settingsReturnState = "menu";
   function openSettings() {
     settingsReturnState = state;
     state = "paused";
+    if (currentMusic) currentMusic.pause();
     [overlay, gameoverScreen, finaleScreen].forEach((s) => s.classList.add("hidden"));
     settingsScreen.classList.remove("hidden");
   }
   function closeSettings() {
     settingsScreen.classList.add("hidden");
     state = settingsReturnState;
+    if (state === "playing" && currentMusic) currentMusic.play().catch(() => {});
     if (state === "menu") overlay.classList.remove("hidden");
     else if (state === "gameover") gameoverScreen.classList.remove("hidden");
     else if (state === "finale") finaleScreen.classList.remove("hidden");
@@ -2890,11 +3892,13 @@
   setSound.addEventListener("change", () => {
     settings.sound = setSound.checked;
     saveSettings();
+    applyMusicVolume();
     beep(880, 0.1, "sine", 0.06);
   });
   setVolume.addEventListener("input", () => {
     settings.volume = Number(setVolume.value);
     saveSettings();
+    applyMusicVolume();
     beep(880, 0.1, "sine", 0.06);
   });
   setSwap.addEventListener("change", () => {

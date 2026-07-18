@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="assets/logo.png" />
   <!-- ?v= is a cache-buster: bump it whenever this file or the css/js change
        so phones pick up the new version without a manual cache clear. -->
-  <link rel="stylesheet" href="style.css?v=10" />
+  <link rel="stylesheet" href="style.css?v=11" />
 </head>
 <body>
   <div id="game-wrap">
@@ -27,10 +27,11 @@
         and it also trickles back slowly on its own — wait around if you run dry); press
         <b>X</b> or ✦ to fire a bolt and purify a corrupted creature back to its true form.
         Every level hides a piece of an ancient rune on a high platform — find it before
-        the hollow tree at the end will let you through. The last level holds a mystical
-        pedestal: slide the five pieces back into the Rune of Resilience to earn an energy
-        shield, then beware the Forest Captain, who hunts you down — beating him gives
-        Sparkles the energy to beam the portal open.
+        the hollow tree at the end will let you through. Assemble the Rune of Resilience at
+        the pedestal to earn an energy shield, then face each realm's Saurosapien boss —
+        beating him gives Sparkles the energy to beam the portal open. Two realms await:
+        the Whispering Forest, then the Sun-Blasted Dunes, where the sand itself gives way
+        beneath your feet — and healed critters now stay to keep you company.
       </p>
       <button id="start-btn" class="btn">Play</button>
       <button id="settings-btn" class="btn btn-small">⚙ Settings</button>
@@ -57,8 +58,8 @@
 
     <div id="finale" class="screen hidden">
       <img class="portrait" src="assets/troll-portrait.jpg" alt="Troll" />
-      <h2>The Whispering Forest is healed!</h2>
-      <p class="quote">"Sparkles will hold the portal steady from here. Well fought, Thpooth."</p>
+      <h2 id="finale-title">The Whispering Forest is healed!</h2>
+      <p class="quote" id="finale-quote">"Sparkles will hold the portal steady from here. Well fought, Thpooth."</p>
       <button id="finale-btn" class="btn">Play Again</button>
     </div>
 
@@ -86,6 +87,7 @@
         <button id="jump-btn" class="ctrl-btn ctrl-jump" aria-label="Jump">⤒</button>
       </div>
     </div>
+    <div id="build-version"></div>
   </div>
 
   <div id="rotate-hint">
@@ -95,6 +97,6 @@
     </div>
   </div>
 
-  <script src="game.js?v=10"></script>
+  <script src="game.js?v=23"></script>
 </body>
 </html>
