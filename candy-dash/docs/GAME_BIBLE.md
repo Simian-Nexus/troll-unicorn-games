@@ -208,7 +208,33 @@ realm 2–5 parallax sets.
   — natural regen still exists, but its purpose is now "you'll always have enough after
   the boss fight," not "grind candy to meet a threshold."
 
-## 9. Naming
+## 9. The 10-World Story Arc (canon 2026-07-17)
+
+Jonathan approved `STORY_ARC_PROPOSAL_10_WORLDS.md` as canon on 2026-07-17 —
+that file is now the authoritative arc: 10 worlds (5 surface realms per episode
+7.5, then 5 "Deep Realms" as the corruption migrates along the Wood's root-ways),
+5 levels each (4 + boss), the five plot threads, and the future-Earth /
+Eldaryn-time-travel cliffhanger that bridges into comic Episode 8.
+
+Canon rules added by that arc, live in the game since 2026-07-17:
+
+- **Healed critters stay.** From World 2's opening beat (Angus: "ye're shootin'
+  those poor corrupted critters TOO HARD — they're PATIENTS!"), purified
+  creatures no longer despawn: they settle and wander harmlessly, so a cleansed
+  level visibly fills with life. (Implemented retroactively in World 1 too.)
+- **World 2 = The Sun-Blasted Dunes** ("The Occupation"): golden desert, heat
+  shimmer, bleached bones of portal trees. New traversal concept: **sinking
+  sand platforms**. Boss: **the Dune Warden**, a Saurosapien quartermaster
+  hoarding water for troops who never came. Intrigue drip: Saurosapien field
+  crates stamped with a Paleotech logo; Cerebra can read it and says nothing.
+- Levels: 2-1 The Bleached Sands (Angus beat), 2-2 The Sunken Caravan,
+  2-3 Mirage Flats, 2-4 The Bone Garden, 2-5 The Dune Warden.
+- **All World 2 art is placeholder** (procedural dunes + hue-shifted forest
+  terrain via `tools/make_dunes_placeholders.py`). Real art prompts:
+  `docs/WORLD2_ASSET_PROMPTS.md`. The Dune Warden reuses the Saurosapien pose
+  art (same species — honest placeholder).
+
+## 10. Naming
 
 - Public game title: **Troll & Unicorn: Candy Dash**
 - Narrative umbrella (shared with Unity projects): **Realms of Corruption**

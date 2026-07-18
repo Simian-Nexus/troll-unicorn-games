@@ -5,6 +5,38 @@ picking up Candy Dash work; it's the "what's true right now" doc. `GAME_BIBLE.md
 is canon/lore, `CANDY_DASH_2_PLAN.md` is the full phase-by-phase history — this
 file is the short version plus the one urgent housekeeping item (git).
 
+> 2026-07-17: `STORY_ARC_PROPOSAL_10_WORLDS.md` — 10-world story arc + 5 plot
+> threads, written from a full read of episodes 1–8. **APPROVED AS CANON by
+> Jonathan same day**; `GAME_BIBLE.md` §9 summarizes what's now in-game.
+>
+> **World 2 (Sun-Blasted Dunes) built 2026-07-17, same session:**
+> - 5 new levels (2-1..2-5) with placeholder art (procedural dune parallax +
+>   hue-shifted forest terrain — `tools/make_dunes_placeholders.py`;
+>   real-art prompt pack in `docs/WORLD2_ASSET_PROMPTS.md`).
+> - Per-level intro cutscene system (`lvl.intro`); Angus's World-2 beat
+>   ("shootin' those critters TOO HARD — they're PATIENTS!") plays at 2-1,
+>   and Angus now always appears inside the spinning vortex.
+> - **Purified critters persist**: settle + wander harmlessly instead of
+>   despawning (all worlds). New: sinking-sand platforms (`sink: true`).
+> - World 1 finale now continues into World 2 (per-boss-level `finale` text,
+>   button becomes "Onward to the next realm ▶").
+> - **Bugfix (found live by Jonathan): shield made Troll immortal** — any
+>   sliver of shield absorbed a whole hit and always regenerated in time.
+>   Now absorbs only what it holds; overflow hits health. Verified in-browser:
+>   health drains to game-over under sustained drone contact.
+> - Dev shortcut: `?level=2-1` (name prefix) or `?level=6` starts there;
+>   index ≥5 implies World 1's rune already assembled.
+> - Playwright-verified: 2-1 renders (dunes parallax, shelves, bleached tree
+>   exit), intro beat plays, tree exit blocks without artifact, game-over
+>   works. NOT yet play-verified: purify-swap→wander visual (code path is
+>   straightforward but nobody has SEEN a healed critter wander yet),
+>   sinking-platform feel/tuning, levels 2-2..2-5, the 2-5 boss+portal flow.
+> - Known cosmetic: drone swoop logic can perma-camp Troll ("press the
+>   attack" retrigger) — reads oddly when he parks on the player; consider a
+>   cooldown. Pre-existing `assets/rune-eihwaz.png` 404 (procedural fallback
+>   covers it). Desert worlds still reuse forest critters/enemies — per-theme
+>   enemy sprite sets are a small follow-up once desert critter art exists.
+
 ## Read first
 
 1. This file
