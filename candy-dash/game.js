@@ -73,7 +73,7 @@
   // PNGs copied from the Unity project's run cycle.
   // Bump when any art asset changes so phones fetch the new files instead of
   // serving stale cached copies (style.css/game.js have their own ?v=).
-  const ASSET_VERSION = 3;
+  const ASSET_VERSION = 4;
   const av = (p) => p + "?av=" + ASSET_VERSION;
 
   const idleSprite = new Image();
@@ -340,7 +340,12 @@
   const HEART_HEAL = 5;
 
   const DRONE_CHASE_SPEED = 160; // drones periodically break patrol and swoop at Troll
-  const DRONE_SWOOP_TIME = 1.5;
+  const DRONE_SWOOP_TIME = 2.2;
+  // Artifact guardians: while Troll is closing in on an uncollected rune
+  // piece, any drone in range pursues him relentlessly (drones fly and
+  // ignore platforms, so the straight line to Troll is always a valid path).
+  const ARTIFACT_GUARD_RADIUS = 300; // how close Troll must be to the artifact
+  const ARTIFACT_GUARD_RANGE = 800; // how far a drone will come to defend it
   // Ground critters also aggro: when Troll is close (and roughly at their
   // height) they leave their patrol and walk at him.
   const GROUND_AGGRO_RANGE = 380;
@@ -998,9 +1003,19 @@
   }
 
   function updateEnemies(dt) {
+    const artifactThreat =
+      artifact &&
+      !artifact.taken &&
+      !intro &&
+      Math.abs(player.x + player.w / 2 - artifact.x) < ARTIFACT_GUARD_RADIUS &&
+      Math.abs(player.y + player.h / 2 - artifact.y) < 340;
     for (const o of obstacles) {
       if (o.hitFlash > 0) o.hitFlash = Math.max(0, o.hitFlash - dt);
       if (o.purifying) continue;
+      if (o.kind === "drone") {
+        o.guarding =
+          artifactThreat && Math.abs(o.x - artifact.x) < ARTIFACT_GUARD_RANGE;
+      }
       if (o.isBoss && o.patrolMin !== undefined) {
         // The boss hunts Troll. He sleeps until Troll approaches his arena,
         // then chases anywhere in the level — clamping him to the arena made
@@ -1062,15 +1077,20 @@
           }
         }
         o.chasing = o.aggro;
-      } else if (o.kind === "drone" && o.swooping > 0) {
-        // Mid-swoop: dive toward Troll, ignoring the patrol route.
-        o.swooping -= dt;
+      } else if (o.kind === "drone" && (o.guarding || o.swooping > 0)) {
+        // Guarding an artifact (relentless) or mid-swoop: home straight at
+        // Troll. Drones fly over everything, so this is a guaranteed path.
+        if (!o.guarding) o.swooping -= dt;
         const tx = player.x + player.w / 2 - o.w / 2;
         const ty = player.y + player.h / 2 - o.h / 2;
         o.x += Math.sign(tx - o.x) * Math.min(Math.abs(tx - o.x), DRONE_CHASE_SPEED * dt);
         o.y += Math.sign(ty - o.y) * Math.min(Math.abs(ty - o.y), DRONE_CHASE_SPEED * 0.8 * dt);
         if (tx !== o.x) o.vx = Math.sign(tx - o.x) * Math.abs(o.vx || 70);
-        if (o.swooping <= 0) o.swoopWait = 4 + Math.random() * 5;
+        if (!o.guarding && o.swooping <= 0) {
+          // nearly caught him? press the attack instead of giving up
+          if (Math.abs(tx - o.x) < 170 && Math.abs(ty - o.y) < 170) o.swooping = 0.8;
+          else o.swoopWait = 4 + Math.random() * 5;
+        }
       } else if (
         // Ground critters aggro too: when Troll is near and roughly at their
         // height, they abandon the patrol route and come at him.
@@ -1091,7 +1111,7 @@
         if (o.x < o.patrolMin) o.vx = Math.abs(o.vx);
         else if (o.x + o.w > o.patrolMax) o.vx = -Math.abs(o.vx);
       }
-      if (o.kind === "drone" && o.swooping <= 0) {
+      if (o.kind === "drone" && o.swooping <= 0 && !o.guarding) {
         // Glide back up to patrol altitude, and occasionally decide to swoop
         // at Troll when he's close enough.
         o.y += (o.homeY - o.y) * Math.min(1, dt * 2.5);
