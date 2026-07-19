@@ -129,6 +129,23 @@ h2 {
   height: 64px;
 }
 
+#finale-eoc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+#finale-eoc-portrait,
+#finale-eoc-line {
+  transition: opacity 0.25s ease;
+}
+
+#finale-eoc.eoc-swapping #finale-eoc-portrait,
+#finale-eoc.eoc-swapping #finale-eoc-line {
+  opacity: 0;
+}
+
 .quote {
   margin: 0;
   font-style: italic;
@@ -145,6 +162,15 @@ h2 {
   font-size: clamp(12px, 2vw, 14px);
   max-width: min(90vw, 420px);
   line-height: 1.5;
+}
+
+.btn-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
 .btn {
@@ -324,6 +350,100 @@ h2 {
 .setting-row input[type="checkbox"] {
   width: 22px;
   height: 22px;
+}
+
+#over-newsletter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(84vw, 300px);
+}
+
+#over-newsletter-form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+}
+
+#over-newsletter-email {
+  font-size: 15px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 2px solid var(--shadow-navy);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+#over-newsletter-status {
+  margin: 0;
+  min-height: 1em;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+#leaderboard-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: min(84vw, 340px);
+}
+
+#leaderboard-entry h3,
+#leaderboard-list h3 {
+  margin: 0;
+  color: var(--navy);
+  font-size: 16px;
+}
+
+#lb-name,
+#lb-email {
+  font-size: 15px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 2px solid var(--shadow-navy);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+#lb-status {
+  margin: 0;
+  min-height: 1em;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+#leaderboard-list {
+  width: min(84vw, 340px);
+}
+
+#lb-list-items {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+#lb-list-items li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface);
+  border: 2px solid var(--shadow-navy);
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+
+#lb-list-items li.lb-mine {
+  border-color: var(--brand);
+  font-weight: 700;
 }
 
 #horn-meter {

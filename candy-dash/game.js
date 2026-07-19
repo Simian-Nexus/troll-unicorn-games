@@ -5,7 +5,7 @@
   // critters not despawning" reports on 2026-07-18 (the game.js?v= number
   // hadn't been bumped despite the file changing). Rendered by the
   // #build-version element (see index.html/style.css) in every screen state.
-  const BUILD_VERSION = "2026-07-18.13";
+  const BUILD_VERSION = "2026-07-19.4";
   const buildVersionEl = document.getElementById("build-version");
   if (buildVersionEl) buildVersionEl.textContent = "build " + BUILD_VERSION;
 
@@ -33,11 +33,31 @@
   const finaleBtn = document.getElementById("finale-btn");
   const finaleTitleEl = document.getElementById("finale-title");
   const finaleQuoteEl = document.getElementById("finale-quote");
+  const finaleRedeemLine = document.getElementById("finale-redeem-line");
+  const finaleEoc = document.getElementById("finale-eoc");
+  const finaleEocPortrait = document.getElementById("finale-eoc-portrait");
+  const finaleEocLine = document.getElementById("finale-eoc-line");
+  const leaderboardEntry = document.getElementById("leaderboard-entry");
+  const lbNameInput = document.getElementById("lb-name");
+  const lbOptinCheck = document.getElementById("lb-optin");
+  const lbEmailInput = document.getElementById("lb-email");
+  const lbStatus = document.getElementById("lb-status");
+  const lbSubmitBtn = document.getElementById("lb-submit-btn");
+  const lbSkipBtn = document.getElementById("lb-skip-btn");
+  const leaderboardList = document.getElementById("leaderboard-list");
+  const lbListItems = document.getElementById("lb-list-items");
   const menuQuote = document.getElementById("menu-quote");
   const menuHighscore = document.getElementById("menu-highscore");
   const overQuote = document.getElementById("over-quote");
   const overPortrait = document.getElementById("over-portrait");
   const scoreLine = document.getElementById("score-line");
+  const overNewsletter = document.getElementById("over-newsletter");
+  const overNewsletterAsk = document.getElementById("over-newsletter-ask");
+  const overNewsletterForm = document.getElementById("over-newsletter-form");
+  const overNewsletterEmail = document.getElementById("over-newsletter-email");
+  const overNewsletterStatus = document.getElementById("over-newsletter-status");
+  const overNewsletterSubmit = document.getElementById("over-newsletter-submit");
+  const overNewsletterDismiss = document.getElementById("over-newsletter-dismiss");
   const moveTrack = document.getElementById("move-track");
   const moveKnob = document.getElementById("move-knob");
   const jumpBtn = document.getElementById("jump-btn");
@@ -85,13 +105,20 @@
   // PNGs copied from the Unity project's run cycle.
   // Bump when any art asset changes so phones fetch the new files instead of
   // serving stale cached copies (style.css/game.js have their own ?v=).
-  const ASSET_VERSION = 5;
+  const ASSET_VERSION = 6;
   const av = (p) => p + "?av=" + ASSET_VERSION;
 
   const idleSprite = new Image();
   idleSprite.src = av("assets/troll/troll-idle.png");
   const unicornSitImg = new Image();
   unicornSitImg.src = av("assets/unicorn-sit.png");
+  // End-of-content beat on the true final finale (see enterFinale) — Sparkles
+  // first admits the game isn't finished yet, then swaps to a cheerier pose
+  // with the "come back later / join the leaderboard" line.
+  const unicornConfusedImg = new Image();
+  unicornConfusedImg.src = av("assets/unicorn-confused.png");
+  const unicornCandyCheerImg = new Image();
+  unicornCandyCheerImg.src = av("assets/unicorn-candy-cheer.png");
 
   const RUN_FRAME_PATHS = [
     "assets/troll/troll-run-1.png",
@@ -150,19 +177,24 @@
   // art candidates live in 02_Art_and_Audio/AI_Art — see docs/GAME_BIBLE.md.
   const ENEMY_KINDS = ["drone", "grunt", "spitter", "brute"];
   const enemySprites = {};
+  const purifiedSprites = {};
+  // Both go through loadImg() (defined just below) rather than a bare
+  // `new Image()`, so a dropped request retries instead of leaving that
+  // kind's sprite permanently undefined for the rest of the session — a
+  // real bug confirmed live 2026-07-19: a World-2 critter purified fine
+  // (healed=true, wanders, unhittable) but kept drawing as corrupted/purple
+  // forever because purifiedSprites[kind] never loaded and drawEnemy()'s
+  // `purifiedSprites[o.kind] || enemySprites[o.kind]` fallback silently
+  // showed the corrupted sprite instead — looked exactly like the shot
+  // "did nothing" even though the critter was actually purified underneath.
   ENEMY_KINDS.forEach((kind) => {
-    const img = new Image();
-    img.onload = () => (enemySprites[kind] = img);
-    img.src = av(`assets/enemies/${kind}.png`);
+    loadImg(`assets/enemies/${kind}.png`, (img) => (enemySprites[kind] = img));
   });
   // Purified counterpart shown while a hit enemy hops away (see purify()).
   // grunt.png is currently a placeholder (reuses the purified rabbit — no
   // purified raccoon still exists yet in 02_Art_and_Audio/AI_Art).
-  const purifiedSprites = {};
   ENEMY_KINDS.forEach((kind) => {
-    const img = new Image();
-    img.onload = () => (purifiedSprites[kind] = img);
-    img.src = av(`assets/enemies/purified/${kind}.png`);
+    loadImg(`assets/enemies/purified/${kind}.png`, (img) => (purifiedSprites[kind] = img));
   });
 
   // Whispering Forest parallax + terrain. Downscaled from the Unity project's
@@ -347,6 +379,113 @@
   const getHighscore = () => Number(localStorage.getItem(HIGHSCORE_KEY) || 0);
   const setHighscore = (v) => localStorage.setItem(HIGHSCORE_KEY, String(v));
 
+  // --- Leaderboard API -------------------------------------------------------
+  // Backed by the studio's shared framework-free PHP backend pattern (see
+  // 03_Games/TAU_HTML5_Games/candy-dash/backend/README.md) — the same shape
+  // as the budgeting app's backend, mounted under the shared API subdomain
+  // instead of living beside the game. Local dev: run
+  // `php -S 127.0.0.1:8090 -t backend/api/public` and point this at
+  // http://127.0.0.1:8090 (or wherever WAMP serves backend/api/public from).
+  const LEADERBOARD_API_BASE = "https://api.spinningmonkeystudios.com/games/candydash";
+  const LB_NAME_KEY = "tu_candydash_lastname"; // remembers the name field between runs
+  // Death happens far more often than finishing the whole game, so the
+  // gameover-screen newsletter CTA (see gameOver()) is a much bigger
+  // opt-in opportunity than the leaderboard's — but it must not nag on
+  // every single retry, so this remembers "already asked" across the
+  // whole run (signed up OR said no thanks either one stops it).
+  const NEWSLETTER_ASKED_KEY = "tu_candydash_newsletter_asked";
+
+  // --- Social share ----------------------------------------------------------
+  // One button, three contexts (menu/gameover/finale) — see the .share-btn
+  // elements in index.html and the wiring near the other button listeners.
+  const GAME_SHARE_URL = "https://trollandunicorn.com/Games/candydash/";
+
+  function shareText(context) {
+    if (context === "gameover") {
+      return `I just scored ${Math.floor(score)} in Troll & Unicorn: Candy Dash! Can you beat it?`;
+    }
+    if (context === "finale") {
+      return "I just healed two whole realms in Troll & Unicorn: Candy Dash! Come play:";
+    }
+    return "Purify corrupted critters and heal two realms in Troll & Unicorn: Candy Dash!";
+  }
+
+  async function shareGame(context, btn) {
+    const text = shareText(context);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Troll & Unicorn: Candy Dash", text, url: GAME_SHARE_URL });
+      } catch (err) {
+        // User backed out of the native share sheet — not an error worth logging.
+      }
+      return;
+    }
+    // Desktop browsers without the Web Share API: copy a ready-to-paste
+    // line to the clipboard instead of juggling one button per platform.
+    const original = btn ? btn.textContent : null;
+    try {
+      await navigator.clipboard.writeText(`${text} ${GAME_SHARE_URL}`);
+      if (btn) {
+        btn.textContent = "Copied!";
+        setTimeout(() => (btn.textContent = original), 1500);
+      }
+    } catch (err) {
+      window.open(GAME_SHARE_URL, "_blank");
+    }
+  }
+
+  async function submitNewsletterOnly(email) {
+    const res = await fetch(`${LEADERBOARD_API_BASE}/v1/candydash/newsletter/optin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok) throw new Error(body.error || `newsletter signup failed: ${res.status}`);
+    return body;
+  }
+
+  function formatRunTime(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2, "0")}`;
+  }
+
+  async function submitLeaderboardScore(payload) {
+    const res = await fetch(`${LEADERBOARD_API_BASE}/v1/candydash/leaderboard/submit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok) throw new Error(body.error || `submit failed: ${res.status}`);
+    return body;
+  }
+
+  async function fetchTopScores(limit = 10) {
+    const res = await fetch(`${LEADERBOARD_API_BASE}/v1/candydash/leaderboard/top?limit=${limit}`);
+    const body = await res.json();
+    if (!res.ok || !body.ok) throw new Error(body.error || `top-scores failed: ${res.status}`);
+    return body.scores;
+  }
+
+  function renderLeaderboardList(rows, justSubmittedId) {
+    lbListItems.innerHTML = "";
+    rows.forEach((row) => {
+      const li = document.createElement("li");
+      if (justSubmittedId && row.id === justSubmittedId) li.classList.add("lb-mine");
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = row.name;
+      const statSpan = document.createElement("span");
+      const time = row.time_seconds != null ? ` · ${formatRunTime(row.time_seconds)}` : "";
+      statSpan.textContent = `${row.score} pts${time}`;
+      li.append(nameSpan, statSpan);
+      lbListItems.appendChild(li);
+    });
+    leaderboardList.classList.toggle("hidden", rows.length === 0);
+  }
+
   const MENU_QUOTES = [
     '"Statistically, most of you will hit the first obstacle."',
     '"This is, in fact, a game. Not a spaceship. I checked."',
@@ -465,6 +604,25 @@
     // that case by retrying on the next interaction of any kind.
     currentMusic.play().catch((err) => {
       console.warn("Music playback blocked/failed:", src, err);
+      armMusicUnlock();
+    });
+  }
+  // One-off track for the true final finale (see enterFinale) — not tied to
+  // any level index, so it's a separate small function rather than a
+  // musicSrcForLevel() case. Loops like level tracks do, so it doesn't go
+  // silent while the player lingers filling in the leaderboard form.
+  function playVictoryMusic() {
+    const src = "assets/Music/End_of_game_victory_music.mp3";
+    if (currentMusic) currentMusic.pause();
+    currentMusic = new Audio(src);
+    currentMusic.loop = true;
+    currentMusicSrc = src;
+    currentMusic.addEventListener("error", () => {
+      console.warn("Victory music failed to load:", src, currentMusic.error);
+    });
+    applyMusicVolume();
+    currentMusic.play().catch((err) => {
+      console.warn("Victory music playback blocked/failed:", src, err);
       armMusicUnlock();
     });
   }
@@ -798,7 +956,14 @@
         { x: 1700, y: GROUND_Y - 40 },
         { x: 1100, y: TIER2_Y - 100, big: true },
       ],
-      boss: { patrol: [1900, 2350] },
+      // Forest Captain — World 1's corruption theme is "The Spillover":
+      // accidental, not chosen. His redemption line should read as
+      // disoriented relief, not a grand speech (GAME_BIBLE §4).
+      boss: {
+        patrol: [1900, 2350],
+        redeemedLine:
+          "I never chose any of this. One moment there was open sky — the next, thorns, and something else thinking my thoughts for me. ...It's quiet in my head again. That's not nothing.",
+      },
       artifact: { x: 1100, y: TIER2_Y - 60 },
       finale: {
         title: "The Whispering Forest is healed!",
@@ -1012,7 +1177,16 @@
         { x: 1730, y: GROUND_Y - 40 },
         { x: 1120, y: TIER2_Y - 100, big: true },
       ],
-      boss: { patrol: [2000, 2450] },
+      // Dune Warden — a quartermaster hoarding water for troops who never
+      // came (GAME_BIBLE §9 / STORY_ARC_PROPOSAL_10_WORLDS.md). His line is
+      // personal — relief at finally being allowed to stop waiting — not
+      // the "who built the corruption?" question reserved for World 6's
+      // Winder.
+      boss: {
+        patrol: [2000, 2450],
+        redeemedLine:
+          "...how long was I counting those crates? Waiting on troops who were never coming, and I kept my post anyway. ...I don't have to guard anything anymore. Thank you.",
+      },
       artifact: { x: 1120, y: TIER2_Y - 60 },
       finale: {
         title: "The Sun-Blasted Dunes are healed!",
@@ -1090,6 +1264,9 @@
     dialogueCooldown,
     elapsed,
     score,
+    crittersRedeemed,
+    crittersLost,
+    runPlayTime,
     lastTime;
   // Run-wide progress (survives level loads within one run, reset by startGame)
   let artifactsTaken = LEVELS.map(() => false);
@@ -1113,6 +1290,7 @@
   let artifactsAssembled = false;
   let introSeen = {}; // level index -> cutscene already played this run
   let finaleNextLevel = null; // set by enterFinale: continue here, or null = game complete
+  let finaleEocTimer = null; // pending confused->cheer swap timeout, see enterFinale
   let puzzle = null; // active assembly minigame
   let piecesViewTimer = 0; // rune-pieces popup (tap the HUD artifact icon)
   let unicornEmerge = 0; // seconds since the boss fell — drives her slide-out
@@ -1123,6 +1301,15 @@
   const NEED_ARTIFACT_LINE = "I have to find the artifact thingy first.";
   const PORTAL_ACTIVATE_DURATION = 1.7;
   const PORTAL_BEAM_HIT_AT = 1.0;
+
+  // --- Boss redemption dialogue ---------------------------------------------
+  // A defeated Saurosapien boss speaks in untranslated static first — per
+  // comic canon, Troll needs a quick translation spell (a green glow around
+  // the boss) before anyone understands him. See startBossDialogue()/
+  // updateBossDialogue() and the isBoss branch of drawDialogue().
+  const BOSS_GARBLED_LINE = "▓▒░ Ξ¥§∆⌐ ¿†ø⌐⌐...ø¥§ ░▒▓";
+  const BOSS_DIALOGUE_GARBLED_HOLD = 2.4; // untranslated static, before the spell
+  const BOSS_DIALOGUE_SPELL_DURATION = 0.9; // green-glow translation beat
 
   function makeEnemy(kind, x, patrolRange) {
     let e;
@@ -1354,6 +1541,40 @@
       return;
     }
     if (puzzle) return; // sliding puzzle is tap/click-driven, jump does nothing
+
+    // A deliberate jump straight at a tree stump commits to it immediately,
+    // skipping exitPrimed/backExitPrimed. That gate exists to stop an
+    // *incidental* walk back onto a stump you just arrived next to from
+    // instantly firing it again (see EXIT_PRIME_DISTANCE) — it was never
+    // meant to make an explicit jump onto the stump wait too.
+    if (backExitPoint) {
+      const overlapBack =
+        player.x + player.w - 20 > backExitPoint.x - 50 &&
+        player.x + 20 < backExitPoint.x + 50 &&
+        player.y + player.h > backExitPoint.y - 130;
+      if (overlapBack) {
+        loadLevel(currentLevelIndex - 1, true);
+        return;
+      }
+    }
+    if (exitPoint) {
+      const overlap =
+        player.x + player.w - 20 > exitPoint.x - 50 &&
+        player.x + 20 < exitPoint.x + 50 &&
+        player.y + player.h > exitPoint.y - 130;
+      if (overlap) {
+        if (artifactCollected) {
+          loadLevel(currentLevelIndex + 1);
+          return;
+        } else if (dialogueCooldown <= 0) {
+          dialogueMessage = NEED_ARTIFACT_LINE;
+          dialogueTimer = DIALOGUE_DURATION;
+          dialogueCooldown = DIALOGUE_COOLDOWN;
+          beep(220, 0.15, "triangle", 0.04);
+        }
+      }
+    }
+
     if (player.grounded) {
       player.vy = JUMP_VELOCITY;
       player.grounded = false;
@@ -1389,6 +1610,36 @@
       age: 0,
     });
     beep(1200, 0.18, "sawtooth", 0.06);
+  }
+
+  // Kicks off once a boss settles into the "dejected" pose: he speaks in
+  // untranslated static first, then Troll's translation spell (green glow,
+  // see spawnBossSpellSparkles) reveals the real line. See
+  // BOSS_DIALOGUE_GARBLED_HOLD/BOSS_DIALOGUE_SPELL_DURATION and the phase
+  // tick in update()'s purifying loop.
+  function startBossDialogue(o) {
+    o.dialoguePhase = "garbled";
+    o.dialogueT = 0;
+  }
+
+  function spawnBossSpellSparkles(o) {
+    const cx = o.x + o.w / 2;
+    const cy = o.y + o.h * 0.5;
+    for (let i = 0; i < 14; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const speed = 60 + Math.random() * 70;
+      sparkles.push({
+        x: cx,
+        y: cy,
+        vx: Math.cos(a) * speed,
+        vy: Math.sin(a) * speed - 30,
+        r: 7,
+        taken: false,
+        life: 1,
+        age: 0,
+        color: "#5ae68c",
+      });
+    }
   }
 
   function spawnPurifySparkles(target, count) {
@@ -1446,6 +1697,7 @@
       target.hopVx = (target.x < player.x ? -1 : 1) * 45;
     }
     score += 30;
+    crittersRedeemed += 1;
     beep(1400, 0.2, "sine", 0.06);
   }
 
@@ -1462,6 +1714,7 @@
     target.hopVy = -140;
     target.hopVx = (target.x < player.x ? -1 : 1) * 45;
     target.finalDeath = true; // skip the purifying->healed conversion; gone for good
+    crittersLost += 1;
     dialogueMessage = OOPS_LINES[Math.floor(Math.random() * OOPS_LINES.length)];
     dialogueTimer = DIALOGUE_DURATION;
     dialogueCooldown = DIALOGUE_COOLDOWN;
@@ -1511,6 +1764,7 @@
     target.defeatPhase = "falling";
     target.defeatPhaseT = BOSS_DEFEAT_FALL_TIME;
     score += 200;
+    crittersRedeemed += 1;
     bossDefeated = true;
     // The Matrix fragment he was unwittingly hoarding while corrupted is
     // released the moment he's purified — that's where Troll's full charge
@@ -1540,8 +1794,59 @@
       if (finaleQuoteEl) finaleQuoteEl.textContent = lvl.finale.quote;
     }
     finaleBtn.textContent = finaleNextLevel !== null ? "Onward to the next realm ▶" : "Play Again";
+    if (finaleRedeemLine) {
+      finaleRedeemLine.textContent =
+        crittersLost > 0
+          ? `Redeemed ${crittersRedeemed} · Lost ${crittersLost} · ${formatRunTime(runPlayTime)}`
+          : `Redeemed ${crittersRedeemed} · ${formatRunTime(runPlayTime)}`;
+    }
+    // The leaderboard is only offered once the whole game (both realms) is
+    // actually finished — finaleNextLevel === null — not at the mid-run
+    // "realm healed" checkpoint, since the run (and its score/timer) keeps
+    // going from there.
+    const gameComplete = finaleNextLevel === null;
+    if (leaderboardEntry) {
+      leaderboardEntry.classList.toggle("hidden", !gameComplete);
+      if (gameComplete) openLeaderboardEntry(finalScore);
+      else leaderboardList.classList.add("hidden");
+    }
+    if (finaleEocTimer !== null) {
+      clearTimeout(finaleEocTimer);
+      finaleEocTimer = null;
+    }
+    if (finaleEoc) {
+      finaleEoc.classList.toggle("hidden", !gameComplete);
+      if (gameComplete) {
+        playVictoryMusic();
+        finaleEocPortrait.src = av("assets/unicorn-confused.png");
+        finaleEocLine.textContent = "Lookth like we haventh finithed the game yeth!";
+        finaleEocTimer = setTimeout(() => {
+          finaleEoc.classList.add("eoc-swapping");
+          setTimeout(() => {
+            finaleEocPortrait.src = av("assets/unicorn-candy-cheer.png");
+            finaleEocLine.textContent =
+              "Thurprithe! Thath everything we've got tho far — more realmth are coming thoon, we promith! " +
+              "Thankth for playing, you legend. Now go add yourthelf to the leaderboard!";
+            finaleEoc.classList.remove("eoc-swapping");
+          }, 250);
+          finaleEocTimer = null;
+        }, 2800);
+      }
+    }
     [overlay, gameoverScreen].forEach((s) => s.classList.add("hidden"));
     finaleScreen.classList.remove("hidden");
+  }
+
+  function openLeaderboardEntry(finalScore) {
+    lbStatus.textContent = "";
+    lbSubmitBtn.disabled = false;
+    lbSubmitBtn.textContent = "Submit Score";
+    lbNameInput.value = localStorage.getItem(LB_NAME_KEY) || "";
+    lbOptinCheck.checked = false;
+    lbEmailInput.value = "";
+    lbEmailInput.classList.add("hidden");
+    fetchTopScores().then((rows) => renderLeaderboardList(rows)).catch(() => {});
+    lbSubmitBtn.dataset.score = String(finalScore);
   }
 
   // Touching or getting shot by an enemy costs health instead of the run;
@@ -1660,7 +1965,15 @@
         // Sinking platforms move away underfoot faster than one frame of
         // gravity, so give the re-land test their per-frame travel as slack.
         const slack = p.sink ? 6 + SINK_RATE * dt + 2 : 6;
-        if (surfY !== null && prevFootY <= surfY + slack && footY >= surfY) {
+        // The penetration test needs the same forgiveness in the other
+        // direction: standing still on a sink platform resets vy to 0 each
+        // landed frame, so next frame's pure-gravity fall (~0.7px at 60fps)
+        // is slower than the surface receding underfoot (SINK_RATE*dt,
+        // ~1px) — footY >= surfY would fail every other frame, dropping
+        // `grounded` to false and back, which read as Troll's sprite
+        // flickering between idle and jump poses (confirmed live 2026-07-19).
+        const penetrationSlack = p.sink ? SINK_RATE * dt + 2 : 0;
+        if (surfY !== null && prevFootY <= surfY + slack && footY >= surfY - penetrationSlack) {
           player.y = surfY - player.h;
           landed = true;
           player.standPlatform = p;
@@ -1893,6 +2206,10 @@
 
   function update(dt) {
     elapsed += dt;
+    // Only ticks while state === "playing" (this function's only caller,
+    // see loop()), so menu/settings/gameover/finale time never counts —
+    // a clean speedrun clock for the leaderboard.
+    runPlayTime += dt;
     if (!exitPrimed && exitPoint && Math.abs(player.x - exitPoint.x) > EXIT_PRIME_DISTANCE)
       exitPrimed = true;
     if (!backExitPrimed && backExitPoint && Math.abs(player.x - backExitPoint.x) > EXIT_PRIME_DISTANCE)
@@ -1946,18 +2263,42 @@
 
     // Purified critters hop for PURIFY_DURATION, then SETTLE AND STAY —
     // healed, harmless, wandering (King Angus, World 2: "ye're shootin'
-    // those poor critters too hard, laddie"). Only the boss still vanishes
-    // into the finale cut.
+    // those poor critters too hard, laddie"). The boss settles into a
+    // permanent dejected pose instead (see below) rather than vanishing.
     for (const o of obstacles) {
       if (!o.purifying) continue;
       o.purifyTimer -= dt;
       if (o.isBoss && o.defeatPhase === "falling") {
         o.defeatPhaseT -= dt;
-        if (o.defeatPhaseT <= 0) o.defeatPhase = "dejected";
+        if (o.defeatPhaseT <= 0) {
+          // Settles for good here — no floor clamp exists for the hop
+          // physics below, so without this he'd fall through the world
+          // forever once nothing removes him from `obstacles` anymore.
+          o.defeatPhase = "dejected";
+          o.hopVx = 0;
+          o.hopVy = 0;
+          o.y = GROUND_Y - o.h;
+          startBossDialogue(o);
+        }
       }
-      o.hopVy += GRAVITY * 0.35 * dt;
-      o.y += o.hopVy * dt;
-      o.x += o.hopVx * dt;
+      if (o.isBoss && o.dialoguePhase) {
+        o.dialogueT += dt;
+        if (o.dialoguePhase === "garbled" && o.dialogueT >= BOSS_DIALOGUE_GARBLED_HOLD) {
+          o.dialoguePhase = "spell";
+          o.dialogueT = 0;
+          spawnBossSpellSparkles(o);
+        } else if (o.dialoguePhase === "spell" && o.dialogueT >= BOSS_DIALOGUE_SPELL_DURATION) {
+          o.dialoguePhase = "translated";
+          o.dialogueT = 0;
+        }
+      }
+      // A dejected boss stops moving entirely — the hop-and-settle physics
+      // below is for the brief collapse only.
+      if (!(o.isBoss && o.defeatPhase === "dejected")) {
+        o.hopVy += GRAVITY * 0.35 * dt;
+        o.y += o.hopVy * dt;
+        o.x += o.hopVx * dt;
+      }
       // World 1 (forest) critters never take the "gentle" branch of purify()
       // in the first place (see purify()) — they're meant to actually
       // disappear once their hop-away animation finishes, not settle into a
@@ -1979,7 +2320,11 @@
         o.vx = HEALED_WANDER_SPEED * (Math.random() < 0.5 ? -1 : 1);
       }
     }
-    obstacles = obstacles.filter((o) => !o.purifying || o.purifyTimer > 0);
+    // A defeated boss is never removed here — canon (GAME_BIBLE §3/§5,
+    // confirmed live 2026-07-19: he was vanishing ~1.5s after defeat
+    // regardless of the finale-portal timing) has him stay, sitting
+    // dejected, through the portal beat and into the finale scene.
+    obstacles = obstacles.filter((o) => o.isBoss || !o.purifying || o.purifyTimer > 0);
 
     const hitboxPad = 10;
     for (const o of obstacles) {
@@ -2763,7 +3108,12 @@
       const drawX = o.x + o.w / 2 - drawW / 2;
       const drawY = o.y + o.h - drawH + bob;
       ctx.save();
-      if (o.purifying) ctx.globalAlpha = Math.max(0, o.purifyTimer / o.purifyDuration);
+      // Ordinary critters fade out on their purifyTimer as they either
+      // convert to a "healed" sprite or disappear; the boss never does
+      // either, so he stays fully opaque — this used to fade him to
+      // invisible ~1.5s after defeat, well before most players could even
+      // reach the portal.
+      if (o.purifying && !o.isBoss) ctx.globalAlpha = Math.max(0, o.purifyTimer / o.purifyDuration);
       // Brief white-hot flash on a non-lethal bolt hit so multi-hp enemies
       // visibly register damage.
       if (o.hitFlash > 0) ctx.filter = "brightness(2.1)";
@@ -2803,6 +3153,8 @@
         ctx.fillRect(o.x, o.y - 16, o.w, 8);
         ctx.fillStyle = "#dcc48f";
         ctx.fillRect(o.x, o.y - 16, o.w * pct, 8);
+      } else if (o.isBoss && o.dialoguePhase) {
+        drawBossDialogue(o);
       } else if (!o.purifying && !o.healed && o.hpMax > 1 && o.hp < o.hpMax) {
         // Small health bar once a multi-hit enemy has taken damage.
         const pct = Math.max(0, o.hp / o.hpMax);
@@ -3068,7 +3420,7 @@
   const UNICORN_SEAT_H = 78;
   const UNICORN_FOOT_SINK = 2;
   const UNICORN_EMERGE_TIME = 1.2;
-  const UNICORN_CALL_LINE = "Quick, Thpooth — bring me that energy!";
+  const UNICORN_CALL_LINE = "Quick, Thpooth — bring me that candy!";
 
   function drawSeatedUnicorn() {
     if (!(unicornSitImg.complete && unicornSitImg.naturalWidth)) return;
@@ -3230,6 +3582,34 @@
       ctx.fillText(l, bx + boxW / 2, by + padY + lineH * (i + 0.5));
     });
     ctx.restore();
+  }
+
+  // Untranslated static, then Troll's green translation-spell glow, then the
+  // real redeemed line — see startBossDialogue()/BOSS_GARBLED_LINE and the
+  // phase tick in update(). Called from drawEnemy() once a boss is dejected.
+  function drawBossDialogue(o) {
+    const cx = o.x + o.w / 2;
+    const topY = o.y - 8;
+    if (o.dialoguePhase === "spell") {
+      const t = o.dialogueT / BOSS_DIALOGUE_SPELL_DURATION;
+      ctx.save();
+      ctx.translate(cx, o.y + o.h * 0.5);
+      const r = o.h * (0.5 + t * 0.6);
+      const grad = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r);
+      grad.addColorStop(0, `rgba(90, 230, 140, ${0.5 * (1 - t)})`);
+      grad.addColorStop(1, "rgba(90, 230, 140, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else if (o.dialoguePhase === "garbled") {
+      drawBubble(cx, topY, BOSS_GARBLED_LINE, 300, 1);
+    } else if (o.dialoguePhase === "translated") {
+      const lvl = LEVELS[currentLevelIndex];
+      const line = (lvl.boss && lvl.boss.redeemedLine) || "...";
+      drawBubble(cx, topY, line, 340, Math.min(1, o.dialogueT / 0.4));
+    }
   }
 
   function drawDialogue() {
@@ -3508,7 +3888,7 @@
     ctx.translate(s.x, s.y);
     const tw = 0.6 + Math.sin(elapsed * 8 + s.x) * 0.4;
     ctx.globalAlpha = Math.max(0.35, tw);
-    ctx.fillStyle = "#dcc48f";
+    ctx.fillStyle = s.color || "#dcc48f";
     ctx.beginPath();
     for (let i = 0; i < 4; i++) {
       const a = (Math.PI / 2) * i;
@@ -3795,6 +4175,9 @@
     enterMobileFullscreen();
     player = null;
     score = 0;
+    crittersRedeemed = 0;
+    crittersLost = 0;
+    runPlayTime = 0;
     artifactsTaken = LEVELS.map(() => false);
     levelEnemyState = LEVELS.map(() => null);
     levelCandyState.forEach((arr) => arr.fill(false));
@@ -3841,12 +4224,24 @@
     overPortrait.src = useTroll ? "assets/troll-portrait.jpg" : "assets/unicorn-vibes.png";
     const pool = useTroll ? OVER_QUOTES_TROLL : OVER_QUOTES_UNICORN;
     overQuote.textContent = pool[Math.floor(Math.random() * pool.length)];
+    if (overNewsletter) {
+      const alreadyAsked = localStorage.getItem(NEWSLETTER_ASKED_KEY) === "1";
+      overNewsletter.classList.toggle("hidden", alreadyAsked);
+      overNewsletterForm.classList.add("hidden");
+      overNewsletterAsk.classList.remove("hidden");
+      overNewsletterStatus.textContent = "";
+      overNewsletterEmail.value = "";
+    }
     showScreen(gameoverScreen);
   }
 
   menuQuote.textContent = MENU_QUOTES[Math.floor(Math.random() * MENU_QUOTES.length)];
   const bestAtLoad = getHighscore();
   menuHighscore.textContent = bestAtLoad > 0 ? `Best: ${bestAtLoad}` : "";
+
+  document.querySelectorAll(".share-btn").forEach((btn) => {
+    btn.addEventListener("click", () => shareGame(btn.dataset.shareContext, btn));
+  });
 
   startBtn.addEventListener("click", startGame);
   retryBtn.addEventListener("click", retryLevel);
@@ -3862,6 +4257,80 @@
       if (isTouchDevice) touchControls.classList.remove("hidden");
     } else {
       startGame();
+    }
+  });
+
+  lbOptinCheck.addEventListener("change", () => {
+    lbEmailInput.classList.toggle("hidden", !lbOptinCheck.checked);
+  });
+
+  lbSkipBtn.addEventListener("click", () => {
+    leaderboardEntry.classList.add("hidden");
+  });
+
+  overNewsletterAsk.addEventListener("click", () => {
+    overNewsletterAsk.classList.add("hidden");
+    overNewsletterForm.classList.remove("hidden");
+  });
+
+  overNewsletterDismiss.addEventListener("click", () => {
+    localStorage.setItem(NEWSLETTER_ASKED_KEY, "1");
+    overNewsletter.classList.add("hidden");
+  });
+
+  overNewsletterSubmit.addEventListener("click", async () => {
+    const email = overNewsletterEmail.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      overNewsletterStatus.textContent = "That email doesn't look right.";
+      return;
+    }
+    overNewsletterSubmit.disabled = true;
+    overNewsletterStatus.textContent = "Signing up…";
+    try {
+      await submitNewsletterOnly(email);
+      localStorage.setItem(NEWSLETTER_ASKED_KEY, "1");
+      overNewsletterStatus.textContent = "You're in — thanks!";
+      overNewsletterDismiss.classList.add("hidden");
+    } catch (err) {
+      console.warn("Newsletter signup failed:", err);
+      overNewsletterStatus.textContent = "Couldn't reach the server — try again later.";
+      overNewsletterSubmit.disabled = false;
+    }
+  });
+
+  lbSubmitBtn.addEventListener("click", async () => {
+    const name = lbNameInput.value.trim();
+    if (!name) {
+      lbStatus.textContent = "Enter a name first.";
+      return;
+    }
+    const wantsNewsletter = lbOptinCheck.checked;
+    const email = lbEmailInput.value.trim();
+    if (wantsNewsletter && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      lbStatus.textContent = "That email doesn't look right.";
+      return;
+    }
+    localStorage.setItem(LB_NAME_KEY, name);
+    lbSubmitBtn.disabled = true;
+    lbStatus.textContent = "Submitting…";
+    try {
+      const result = await submitLeaderboardScore({
+        name,
+        score: Number(lbSubmitBtn.dataset.score || 0),
+        critters_redeemed: crittersRedeemed,
+        critters_lost: crittersLost,
+        time_seconds: Math.floor(runPlayTime),
+        email: wantsNewsletter ? email : null,
+        newsletter_optin: wantsNewsletter,
+      });
+      lbStatus.textContent = "Added to the leaderboard!";
+      lbSubmitBtn.textContent = "Submitted";
+      const rows = await fetchTopScores();
+      renderLeaderboardList(rows, result.id);
+    } catch (err) {
+      console.warn("Leaderboard submit failed:", err);
+      lbStatus.textContent = "Couldn't reach the leaderboard — try again later.";
+      lbSubmitBtn.disabled = false;
     }
   });
 
@@ -4021,6 +4490,9 @@
   });
 
   score = 0;
+  crittersRedeemed = 0;
+  crittersLost = 0;
+  runPlayTime = 0;
   loadLevel(0);
   requestAnimationFrame(loop);
 })();

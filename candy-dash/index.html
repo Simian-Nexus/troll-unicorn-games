@@ -4,17 +4,27 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <title>Troll & Unicorn: Candy Dash</title>
-  <link rel="icon" type="image/png" href="assets/logo.png" />
+  <link rel="icon" type="image/png" href="assets/logo.png?v=2" />
+  <meta name="description" content="A free browser platformer: purify corrupted critters, collect Matrix-energy candy, and heal two realms as Troll — with Sparkles the lisping unicorn along for the ride." />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Troll & Unicorn: Candy Dash" />
+  <meta property="og:description" content="A free browser platformer: purify corrupted critters, collect Matrix-energy candy, and heal two realms as Troll — with Sparkles the lisping unicorn along for the ride." />
+  <meta property="og:image" content="https://trollandunicorn.com/Games/candydash/assets/splash_full.png" />
+  <meta property="og:url" content="https://trollandunicorn.com/Games/candydash/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Troll & Unicorn: Candy Dash" />
+  <meta name="twitter:description" content="A free browser platformer: purify corrupted critters, collect Matrix-energy candy, and heal two realms as Troll — with Sparkles the lisping unicorn along for the ride." />
+  <meta name="twitter:image" content="https://trollandunicorn.com/Games/candydash/assets/splash_full.png" />
   <!-- ?v= is a cache-buster: bump it whenever this file or the css/js change
        so phones pick up the new version without a manual cache clear. -->
-  <link rel="stylesheet" href="style.css?v=11" />
+  <link rel="stylesheet" href="style.css?v=15" />
 </head>
 <body>
   <div id="game-wrap">
     <canvas id="game" width="960" height="600"></canvas>
 
     <div id="overlay" class="screen">
-      <img class="logo" src="assets/logo.png" alt="Troll & Unicorn" />
+      <img class="logo" src="assets/logo.png?v=2" alt="Troll & Unicorn" />
       <h1>Candy Dash</h1>
       <div class="portrait-row">
         <img class="portrait" src="assets/troll-portrait.jpg" alt="Troll" />
@@ -31,10 +41,16 @@
         the pedestal to earn an energy shield, then face each realm's Saurosapien boss —
         beating him gives Sparkles the energy to beam the portal open. Two realms await:
         the Whispering Forest, then the Sun-Blasted Dunes, where the sand itself gives way
-        beneath your feet — and healed critters now stay to keep you company.
+        beneath your feet — and healed critters now stay to keep you company. Careful, though:
+        shooting a critter that's already been redeemed hurts it for real and it's gone for
+        good, so purify each one just once. Beat both realms and you can add your name (and
+        your redeemed/lost/time stats) to the leaderboard.
       </p>
-      <button id="start-btn" class="btn">Play</button>
-      <button id="settings-btn" class="btn btn-small">⚙ Settings</button>
+      <div class="btn-row">
+        <button id="start-btn" class="btn">Play</button>
+        <button id="settings-btn" class="btn btn-small">⚙ Settings</button>
+        <button class="btn btn-small share-btn" data-share-context="menu">🔗 Share</button>
+      </div>
       <p class="highscore" id="menu-highscore"></p>
     </div>
 
@@ -53,14 +69,55 @@
       <img class="portrait small" id="over-portrait" src="assets/unicorn-vibes.png" alt="" />
       <p class="quote" id="over-quote"></p>
       <h2 id="score-line"></h2>
-      <button id="retry-btn" class="btn">Retry Level</button>
+      <div class="btn-row">
+        <button id="retry-btn" class="btn">Retry Level</button>
+        <button class="btn btn-small share-btn" data-share-context="gameover">🔗 Share</button>
+      </div>
+
+      <div id="over-newsletter" class="hidden">
+        <button id="over-newsletter-ask" class="btn btn-small">📧 Get Troll &amp; Unicorn updates</button>
+        <div id="over-newsletter-form" class="hidden">
+          <input type="email" id="over-newsletter-email" placeholder="you@example.com" autocomplete="email" />
+          <p id="over-newsletter-status"></p>
+          <button id="over-newsletter-submit" class="btn btn-small">Sign Up</button>
+          <button id="over-newsletter-dismiss" class="btn btn-small">No Thanks</button>
+        </div>
+      </div>
     </div>
 
     <div id="finale" class="screen hidden">
       <img class="portrait" src="assets/troll-portrait.jpg" alt="Troll" />
       <h2 id="finale-title">The Whispering Forest is healed!</h2>
       <p class="quote" id="finale-quote">"Sparkles will hold the portal steady from here. Well fought, Thpooth."</p>
-      <button id="finale-btn" class="btn">Play Again</button>
+      <p class="quote" id="finale-redeem-line"></p>
+
+      <div id="finale-eoc" class="hidden">
+        <img class="portrait" id="finale-eoc-portrait" src="" alt="Sparkles" />
+        <p class="quote" id="finale-eoc-line"></p>
+      </div>
+
+      <div id="leaderboard-entry" class="hidden">
+        <h3>Join the leaderboard?</h3>
+        <input type="text" id="lb-name" maxlength="20" placeholder="Your name" autocomplete="off" />
+        <label class="setting-row">
+          <span>Also sign up for the Troll &amp; Unicorn newsletter</span>
+          <input type="checkbox" id="lb-optin" />
+        </label>
+        <input type="email" id="lb-email" class="hidden" placeholder="you@example.com" autocomplete="email" />
+        <p id="lb-status"></p>
+        <button id="lb-submit-btn" class="btn btn-small">Submit Score</button>
+        <button id="lb-skip-btn" class="btn btn-small">Skip</button>
+      </div>
+
+      <div id="leaderboard-list" class="hidden">
+        <h3>Top Runs</h3>
+        <ol id="lb-list-items"></ol>
+      </div>
+
+      <div class="btn-row">
+        <button id="finale-btn" class="btn">Play Again</button>
+        <button class="btn btn-small share-btn" data-share-context="finale">🔗 Share</button>
+      </div>
     </div>
 
     <div id="hud" class="hidden">
@@ -97,6 +154,6 @@
     </div>
   </div>
 
-  <script src="game.js?v=23"></script>
+  <script src="game.js?v=28"></script>
 </body>
 </html>
