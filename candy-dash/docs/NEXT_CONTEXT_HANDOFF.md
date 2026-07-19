@@ -5,6 +5,47 @@ picking up Candy Dash work; it's the "what's true right now" doc. `GAME_BIBLE.md
 is canon/lore, `CANDY_DASH_2_PLAN.md` is the full phase-by-phase history — this
 file is the short version plus the one urgent housekeeping item (git).
 
+> **2026-07-20: real tree/ruin platform art wired in, spitter enemy no longer
+> fires from off-screen-adjacent range.**
+> - **New forest platform-connector art** — Jonathan supplied
+>   `assets/forest/trees/trunk-sprites.png` (3×2 grid), `tree-tops-sprites.png`
+>   (2×4 grid), and `assets/forest/ruins/ruins-sprites.png` (3×2 grid),
+>   replacing the old procedural brown-gradient trapezoid connector under
+>   forest platforms. New generic `drawSpriteCell(img, grid, index, cx,
+>   bottomY, dh, maxW)` helper slices one cell of a grid sheet, bottom-anchored
+>   and width-capped. Each platform now gets a deterministic (seeded from
+>   `x`/`y`/index, not `Math.random()`, so it's stable across reloads)
+>   `connectorStyle` ("ruin" or "trunk", 1-in-3 ruin) and `connectorVariant`/
+>   `treeTopVariant`. Ruins are self-contained pillars; trunks get a canopy
+>   drawn first (background) topped by one of the 8 tree-top variants. Both
+>   draw *before* the walkable `branch.png` platform surface in the same
+>   frame, so the top of the trunk/pillar is naturally occluded — no cropping
+>   needed. Gated to `themeName === "forest"` only — World 2's dunes theme has
+>   no matching art and still uses the original procedural connector, as does
+>   forest before the new art has finished loading. `full-trees-sprites.png`
+>   (standalone background trees) was inspected but not used — doesn't fit the
+>   platform-connector role; worth a look for background decoration later.
+>   Visually confirmed via Playwright screenshots at level 1-1 (ruin pillars)
+>   and 1-3 "The Old Grove" (trunk+canopy) — both well-composed, correctly
+>   occluded, not distorted.
+> - **Spitter enemy was firing at any on-screen distance** — Jonathan caught
+>   this live (screenshot of the purple spiky spitter). Fixed to match the
+>   brute's existing rock-throw gating exactly: new `SPIT_RANGE = 420`
+>   constant, spitter fire condition now also requires
+>   `horizDist < SPIT_RANGE` (Troll's actual distance, not just camera
+>   visibility) alongside the existing `onScreen` check. `node --check` clean;
+>   smoke-tested via Playwright (level 1-1 loads, plays, no new console
+>   errors) but **not yet play-verified with Troll actually walking up to a
+>   live spitter** — spitters first appear around level 1-4/2-1 per the level
+>   data (`x: 1450` etc.), out of easy scripted-input reach this pass. Worth a
+>   quick manual check next time you're near one.
+> - `BUILD_VERSION` bumped `2026-07-20.1` → `2026-07-20.2`, `index.html`'s
+>   `game.js?v=` bumped 29 → 30, `dist/game.js` rebuilt via `npm run build`
+>   (185940 → 155643 bytes). **Still needs Jonathan's FileZilla upload** —
+>   none of this is live yet (upload `dist/game.js` renamed to `game.js`, plus
+>   `index.html` and the new `assets/forest/trees/` and `assets/forest/ruins/`
+>   files).
+
 > **2026-07-19 (even later, same day): newsletter permission gap found +
 > fixed, obfuscated deployment build added, Brain docs closeout, git
 > committed and pushed.**

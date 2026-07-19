@@ -5,7 +5,7 @@
   // critters not despawning" reports on 2026-07-18 (the game.js?v= number
   // hadn't been bumped despite the file changing). Rendered by the
   // #build-version element (see index.html/style.css) in every screen state.
-  const BUILD_VERSION = "2026-07-19.4";
+  const BUILD_VERSION = "2026-07-20.2";
   const buildVersionEl = document.getElementById("build-version");
   if (buildVersionEl) buildVersionEl.textContent = "build " + BUILD_VERSION;
 
@@ -105,7 +105,7 @@
   // PNGs copied from the Unity project's run cycle.
   // Bump when any art asset changes so phones fetch the new files instead of
   // serving stale cached copies (style.css/game.js have their own ?v=).
-  const ASSET_VERSION = 6;
+  const ASSET_VERSION = 7;
   const av = (p) => p + "?av=" + ASSET_VERSION;
 
   const idleSprite = new Image();
@@ -256,6 +256,35 @@
     },
   ];
   const branchTile = loadImg("assets/forest/terrain/branch.png");
+  // Real platform-support art (2026-07-20, Jonathan), replacing the flat
+  // brown-gradient trapezoid placeholder in drawPlatformConnector() below.
+  // Each is a 3x2 (trunk/ruins) or 2x4 (tree-tops) sprite sheet — see
+  // drawSpriteCell() and the connectorStyle/connectorVariant/treeTopVariant
+  // fields assigned per-platform in loadLevel(). Forest theme only; World
+  // 2's dunes still use the old procedural sandstone-pillar placeholder
+  // since no matching desert art exists yet.
+  const trunkSpritesImg = loadImg("assets/forest/trees/trunk-sprites.png");
+  const treeTopSpritesImg = loadImg("assets/forest/trees/tree-tops-sprites.png");
+  const ruinSpritesImg = loadImg("assets/forest/ruins/ruins-sprites.png");
+  const TRUNK_SPRITE_GRID = { cols: 3, rows: 2 };
+  const TREE_TOP_SPRITE_GRID = { cols: 2, rows: 4 };
+  const RUIN_SPRITE_GRID = { cols: 3, rows: 2 };
+  // Draws one cell of a {cols, rows} sprite sheet into an arbitrary
+  // destination box, bottom-anchored (dy is the BOTTOM of the box, since
+  // every caller here is placing something that stands on the ground/a
+  // platform) — scales to dh, honouring the cell's own aspect ratio, and
+  // returns the width actually drawn (dw is a cap, not a fixed width).
+  function drawSpriteCell(img, grid, index, cx, bottomY, dh, maxW) {
+    const cellW = img.naturalWidth / grid.cols;
+    const cellH = img.naturalHeight / grid.rows;
+    const col = index % grid.cols;
+    const row = Math.floor(index / grid.cols) % grid.rows;
+    let scale = dh / cellH;
+    let dw = cellW * scale;
+    if (maxW && dw > maxW) dw = maxW;
+    ctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, cx - dw / 2, bottomY - dh, dw, dh);
+    return dw;
+  }
   const redeemedLizard = loadImg("assets/forest/cutscene/redeemed-lizard.png");
   // Portal is two layers so the swirl can spin independently of the oblique
   // (foreshortened-ellipse) outer ring: portal-frame.png is the original art
@@ -679,6 +708,7 @@
   const HEART_HEAL = PLAYER_MAX_HP; // a heart fully restores Troll's life energy
   const BRUTE_ROCK_RANGE = 420; // brutes lob a rock at Troll whenever he's in range but out of walking reach
   const BRUTE_ROCK_COOLDOWN = 2.4;
+  const SPIT_RANGE = 420; // spitters only fire once Troll is this close, same idea as BRUTE_ROCK_RANGE
 
   const DRONE_CHASE_SPEED = 160; // drones periodically break patrol and swoop at Troll
   const DRONE_SWOOP_TIME = 2.2;
@@ -1411,15 +1441,25 @@
       crouching: false,
       idleTimer: 0,
     };
-    platforms = lvl.platforms.map((p) => ({
-      x: p.x,
-      y: p.y,
-      w: p.w,
-      h: 18,
-      bridge: !!p.bridge,
-      sink: !!p.sink,
-      sinkOff: 0,
-    }));
+    platforms = lvl.platforms.map((p, i) => {
+      // Deterministic per-platform pick (position-seeded, not Math.random())
+      // so a given platform always shows the same trunk/ruin across
+      // revisits of the same level, instead of reshuffling on every load.
+      const seed = Math.floor(p.x * 7 + p.y * 3 + i * 11);
+      return {
+        x: p.x,
+        y: p.y,
+        w: p.w,
+        h: 18,
+        bridge: !!p.bridge,
+        sink: !!p.sink,
+        sinkOff: 0,
+        // Ruins are the rarer/"special" one — roughly 1 in 3.
+        connectorStyle: seed % 3 === 0 ? "ruin" : "trunk",
+        connectorVariant: seed % 6,
+        treeTopVariant: Math.floor(seed / 6) % 8,
+      };
+    });
     const savedEnemyState = levelEnemyState[idx];
     obstacles = lvl.enemies
       .map((e, i) => {
@@ -2186,7 +2226,11 @@
       if (o.kind === "spitter") {
         o.spitTimer -= dt;
         const onScreen = o.x - cameraX > -40 && o.x - cameraX < W + 40;
-        if (o.spitTimer <= 0 && onScreen) {
+        // Was firing at any onscreen spitter regardless of distance —
+        // Jonathan, 2026-07-20: only fire once Troll is actually close,
+        // same gating the brute's rock-throw already had.
+        const horizDist = Math.abs(player.x + player.w / 2 - (o.x + o.w / 2));
+        if (o.spitTimer <= 0 && onScreen && horizDist < SPIT_RANGE) {
           // Aim at Troll's current position: with an initial vy of -430 and
           // this arc's gravity, apex-to-apex airtime is fixed, so solve for
           // the horizontal speed that lands the shot back at Troll's x.
@@ -3259,18 +3303,42 @@
     ctx.restore();
   }
 
-  // Placeholder connector (2026-07-18) so a plain floating platform reads as
-  // "resting on a trunk/pillar rooted in the ground" rather than debris
-  // hanging in mid-air — a tapered, per-theme-tinted shape from the
-  // platform's underside down to the ground line. Bridges and sinking-sand
-  // platforms are their own distinct floating mechanics and don't get one.
-  // Swap for a real seamlessly-tiling trunk/pillar sprite later (see the
-  // terrain-redesign plan) — nothing else about the call site needs to change.
+  // So a plain floating platform reads as "resting on a trunk/pillar rooted
+  // in the ground" rather than debris hanging in mid-air. Bridges and
+  // sinking-sand platforms are their own distinct floating mechanics and
+  // don't get one. Forest theme: real art (2026-07-20) — either a mossy
+  // ruin pillar (self-contained, own flat cap) or a tree trunk with a
+  // canopy sprite drawn behind it as a decorative flourish; both are drawn
+  // full-height so their own cap sits behind branch.png's walkable surface,
+  // which is drawn afterward and naturally occludes it — no cropping
+  // needed. Falls back to the original tapered gradient trapezoid if the
+  // art hasn't loaded yet, and unconditionally for World 2's dunes theme,
+  // which has no matching desert art yet.
   function drawPlatformConnector(p) {
     if (p.bridge || p.sink || p.groundBump) return;
     const topY = p.y + p.h * 0.5;
     if (GROUND_Y <= topY) return;
     const cx = p.x + p.w / 2;
+    const spanH = GROUND_Y - topY;
+
+    if (themeName === "forest") {
+      if (p.connectorStyle === "ruin" && ruinSpritesImg.complete && ruinSpritesImg.naturalWidth) {
+        drawSpriteCell(ruinSpritesImg, RUIN_SPRITE_GRID, p.connectorVariant, cx, GROUND_Y, spanH, p.w * 1.15);
+        return;
+      }
+      if (p.connectorStyle === "trunk" && trunkSpritesImg.complete && trunkSpritesImg.naturalWidth) {
+        // Canopy first (background, wider than the platform, allowed to
+        // peek out either side) so the trunk and then branch.png's own
+        // walkable surface both draw on top of it.
+        if (treeTopSpritesImg.complete && treeTopSpritesImg.naturalWidth) {
+          const canopyH = spanH * 0.55;
+          drawSpriteCell(treeTopSpritesImg, TREE_TOP_SPRITE_GRID, p.treeTopVariant, cx, topY + canopyH * 0.55, canopyH, p.w * 2.6);
+        }
+        drawSpriteCell(trunkSpritesImg, TRUNK_SPRITE_GRID, p.connectorVariant, cx, GROUND_Y, spanH, p.w * 1.15);
+        return;
+      }
+    }
+
     const topW = Math.min(p.w * 0.34, 60);
     const botW = Math.min(p.w * 0.5, 90);
     const [c0, c1] = theme().connectorColors;
