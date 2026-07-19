@@ -1,0 +1,24 @@
+{
+  "environment": "local",
+  "database": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "database": "candydash",
+    "username": "root",
+    "password": "",
+    "charset": "utf8mb4",
+    "table": "candydash_leaderboard"
+  },
+  "newsletterDatabase": {
+    "host": "",
+    "port": 3306,
+    "database": "",
+    "username": "",
+    "password": "",
+    "charset": "utf8mb4",
+    "table": "candydash_newsletter_optins"
+  },
+  "cors": {
+    "allowedOrigins": "*"
+  }
+}
