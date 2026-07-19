@@ -1,0 +1,16 @@
+# Real backend config — only the .template.* versions are checked in.
+# Local dev copies (created once, then left alone) and production copies
+# (created by hand on Bluehost) both stay out of git.
+backend/config/candydash-api.config.php
+backend/config/candydash-api.config.json
+
+# Real Bluehost FTP credentials for tools/publish-candydash-backend.ps1 —
+# only the .template.json is checked in.
+tools/bluehost-publish.config.json
+
+# Obfuscation build tooling (package.json) — dependencies get reinstalled
+# via `npm install`, not committed. dist/game.js (the actual build output)
+# IS committed on purpose — see tools/build-obfuscated.js's header comment;
+# deploys are manual FileZilla, not a CI step, so the built file needs to
+# just be sitting there ready to upload.
+node_modules/

@@ -1,0 +1,12 @@
+{
+  "name": "candy-dash",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Build tooling for Troll & Unicorn: Candy Dash. The game itself is plain HTML5/JS with no build step at runtime — this only produces an obfuscated dist/game.js for deployment, source stays game.js.",
+  "scripts": {
+    "build": "node tools/build-obfuscated.js"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^5.5.0"
+  }
+}
