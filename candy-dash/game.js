@@ -5,7 +5,7 @@
   // critters not despawning" reports on 2026-07-18 (the game.js?v= number
   // hadn't been bumped despite the file changing). Rendered by the
   // #build-version element (see index.html/style.css) in every screen state.
-  const BUILD_VERSION = "2026-07-20.21";
+  const BUILD_VERSION = "2026-07-21.1";
   const buildVersionEl = document.getElementById("build-version");
   if (buildVersionEl) buildVersionEl.textContent = "build " + BUILD_VERSION;
 
@@ -1667,6 +1667,7 @@
     dialogueDurationTotal,
     dialogueCooldown,
     dialogueQueue,
+    dialogueSpeaker,
     elapsed,
     score,
     crittersRedeemed,
@@ -1685,6 +1686,10 @@
   // run (any tree, any level) — see sayTreeLine(). Reset alongside the other
   // run-progress state above.
   let hasNoticedHorizonOutline = false;
+  // The first window-tree in 1-1 introduces itself automatically when Troll
+  // reaches it. Keep this run-wide so walking back past it (or retrying after
+  // already hearing it) cannot retrigger the same introduction.
+  let hasAutoTalkedFirstTree = false;
   // Per-level enemy fates, so walking back through the mirrored stump (or
   // forward again later) doesn't respawn everything as if freshly corrupted.
   // levelEnemyState[idx] is null until that level has been visited once; once
@@ -1719,6 +1724,11 @@
   // fast").
   const TREE_DIALOGUE_DURATION = 4.5;
   const DIALOGUE_COOLDOWN = 3;
+  // Speaker cues stay deliberately close to white: tree voices get a soft
+  // leafy tint, while every Troll bubble gets a warm orange tint.
+  const BUBBLE_FILL_DEFAULT = "rgba(255,255,255,0.95)";
+  const BUBBLE_FILL_TREE = "rgba(243,252,244,0.96)";
+  const BUBBLE_FILL_TROLL = "rgba(255,247,239,0.96)";
   const NEED_ARTIFACT_LINE = "I have to find the artifact thingy first.";
   // Flavor-only easter egg (2026-07-20, Jonathan): talking to the resident
   // of any hollow tree gate (Enter key / touch ⏎ action button), whether or not
@@ -2033,6 +2043,7 @@
     dialogueDurationTotal = DIALOGUE_DURATION;
     dialogueCooldown = 0;
     dialogueQueue = [];
+    dialogueSpeaker = "troll";
     // Story cutscenes are per-level data now (lvl.intro) — played once per
     // run, so a retry of the same level doesn't replay it.
     if (lvl.intro && !introSeen[idx]) {
@@ -2084,6 +2095,7 @@
           dialogueMessage = NEED_ARTIFACT_LINE;
           dialogueTimer = DIALOGUE_DURATION;
           dialogueDurationTotal = DIALOGUE_DURATION;
+          dialogueSpeaker = "troll";
           dialogueCooldown = DIALOGUE_COOLDOWN;
           beep(220, 0.15, "triangle", 0.04);
         }
@@ -2186,10 +2198,17 @@
     dialogueMessage = picked.text;
     dialogueTimer = TREE_DIALOGUE_DURATION;
     dialogueDurationTotal = TREE_DIALOGUE_DURATION;
-    dialogueQueue = picked.followUp ? [{ text: picked.followUp, duration: TREE_DIALOGUE_DURATION }] : [];
+    dialogueSpeaker = "tree";
+    dialogueQueue = picked.followUp
+      ? [{ text: picked.followUp, duration: TREE_DIALOGUE_DURATION, speaker: "troll" }]
+      : [];
     if (!hasNoticedHorizonOutline) {
       hasNoticedHorizonOutline = true;
-      dialogueQueue.push({ text: TROLL_HORIZON_OUTLINE_LINE, duration: TREE_DIALOGUE_DURATION });
+      dialogueQueue.push({
+        text: TROLL_HORIZON_OUTLINE_LINE,
+        duration: TREE_DIALOGUE_DURATION,
+        speaker: "troll",
+      });
     }
     beep(660, 0.14, "sine", 0.05);
     debugTalk(
@@ -2236,6 +2255,32 @@
     );
   }
 
+  // One-time story trigger for 1-1's first window-tree (the platform tree at
+  // x=1150 in the current layout). It uses the same proximity and dialogue
+  // path as a manual interaction, so its line tier, duration, audio cue, and
+  // green speaker tint cannot drift from the regular tree-talk behavior.
+  function tryAutoTalkToFirstTree() {
+    if (
+      hasAutoTalkedFirstTree ||
+      currentLevelIndex !== 0 ||
+      intro ||
+      puzzle ||
+      dialogueTimer > 0 ||
+      dialogueQueue.length
+    ) {
+      return;
+    }
+    const firstTree = platforms.filter(isWindowTreePlatform).sort((a, b) => a.x - b.x)[0];
+    if (!firstTree) return;
+    const treePoint = { x: firstTree.x + firstTree.w / 2, y: GROUND_Y };
+    const nearTree =
+      Math.abs(player.x + player.w / 2 - treePoint.x) < TREE_TALK_RANGE_X &&
+      Math.abs(player.y + player.h - treePoint.y) < TREE_TALK_RANGE_Y;
+    if (!nearTree) return;
+    hasAutoTalkedFirstTree = true;
+    sayTreeLine(0, `the first platform window-tree at x=${Math.round(firstTree.x)} (automatic)`);
+  }
+
   // Kicks off once a boss settles ("falling" phase ends): he speaks in
   // untranslated static first (still lying down — drawEnemy() keeps the
   // defeated/lying sprite through this and "spell"), then Troll's
@@ -2253,6 +2298,7 @@
     dialogueMessage = TROLL_TRANSLATION_SPELL_LINE;
     dialogueTimer = DIALOGUE_DURATION;
     dialogueDurationTotal = DIALOGUE_DURATION;
+    dialogueSpeaker = "troll";
   }
 
   // Spawns the green translation-spell sparkles at (cx, cy) — Troll's
@@ -2352,6 +2398,7 @@
     dialogueMessage = OOPS_LINES[Math.floor(Math.random() * OOPS_LINES.length)];
     dialogueTimer = DIALOGUE_DURATION;
     dialogueDurationTotal = DIALOGUE_DURATION;
+    dialogueSpeaker = "troll";
     dialogueCooldown = DIALOGUE_COOLDOWN;
     beep(200, 0.2, "sawtooth", 0.05);
   }
@@ -2942,6 +2989,7 @@
 
     updatePlayerMovement(dt);
     updatePlayerVertical(dt);
+    tryAutoTalkToFirstTree();
     // Sinking sand: gives way underfoot, springs back when left alone.
     for (const p of platforms) {
       if (!p.sink) continue;
@@ -2995,7 +3043,11 @@
           o.y = GROUND_Y - o.h;
           startBossDialogue(o);
           if (alliesLostToBoss > 0) {
-            dialogueQueue.push({ text: ALLY_SURVIVAL_LINE, duration: DIALOGUE_DURATION });
+            dialogueQueue.push({
+              text: ALLY_SURVIVAL_LINE,
+              duration: DIALOGUE_DURATION,
+              speaker: "troll",
+            });
           }
         }
       }
@@ -3072,6 +3124,7 @@
         dialogueMessage = STOMP_LINES[Math.floor(Math.random() * STOMP_LINES.length)];
         dialogueTimer = DIALOGUE_DURATION;
         dialogueDurationTotal = DIALOGUE_DURATION;
+        dialogueSpeaker = "troll";
         beep(880, 0.12, "triangle", 0.06);
       }
     }
@@ -3277,6 +3330,7 @@
           dialogueMessage = NEED_PIECES_LINE;
           dialogueTimer = DIALOGUE_DURATION;
           dialogueDurationTotal = DIALOGUE_DURATION;
+          dialogueSpeaker = "troll";
           dialogueCooldown = DIALOGUE_COOLDOWN;
           beep(220, 0.15, "triangle", 0.04);
         }
@@ -3293,6 +3347,7 @@
         dialogueMessage = next.text;
         dialogueTimer = next.duration;
         dialogueDurationTotal = next.duration;
+        dialogueSpeaker = next.speaker || "troll";
       }
     }
     if (dialogueCooldown > 0) dialogueCooldown -= dt;
@@ -3324,6 +3379,7 @@
           dialogueMessage = NEED_ARTIFACT_LINE;
           dialogueTimer = DIALOGUE_DURATION;
           dialogueDurationTotal = DIALOGUE_DURATION;
+          dialogueSpeaker = "troll";
           dialogueCooldown = DIALOGUE_COOLDOWN;
           beep(220, 0.15, "triangle", 0.04);
         }
@@ -3371,6 +3427,7 @@
         dialogueMessage = NEED_ASSEMBLY_LINE;
         dialogueTimer = DIALOGUE_DURATION;
         dialogueDurationTotal = DIALOGUE_DURATION;
+        dialogueSpeaker = "troll";
         dialogueCooldown = DIALOGUE_COOLDOWN;
         beep(220, 0.15, "triangle", 0.04);
       }
@@ -4564,7 +4621,7 @@
   // screens, so canvas-space fonts need to be ~2x what desktop would use.
   // `glow` (0..1, optional) adds a fading green outer glow to the bubble
   // shape itself — used for the boss-dialogue garbled→translated swap.
-  function drawBubble(cx, bottomY, text, maxW, alpha, glow) {
+  function drawBubble(cx, bottomY, text, maxW, alpha, glow = 0, fillColor = BUBBLE_FILL_DEFAULT) {
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     ctx.font = "32px Segoe UI, sans-serif";
@@ -4595,7 +4652,7 @@
     // above y=0 and clip it against the canvas edge (Jonathan, 2026-07-20).
     const bx = Math.max(cameraX + 8, Math.min(cameraX + W - boxW - 8, cx - boxW / 2));
     const by = Math.max(8, Math.min(H - boxH - 8, bottomY - boxH - 10));
-    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.fillStyle = fillColor;
     ctx.strokeStyle = "#131d31";
     ctx.lineWidth = 2;
     if (glow > 0) {
@@ -4670,7 +4727,8 @@
 
   function drawDialogue() {
     const alpha = Math.min(1, dialogueTimer / 0.4, (dialogueDurationTotal - dialogueTimer) / 0.3 + 1);
-    drawBubble(player.x + player.w / 2, player.y - 24, dialogueMessage, 320, alpha);
+    const fillColor = dialogueSpeaker === "tree" ? BUBBLE_FILL_TREE : BUBBLE_FILL_TROLL;
+    drawBubble(player.x + player.w / 2, player.y - 24, dialogueMessage, 320, alpha, 0, fillColor);
   }
 
   function drawHeart(hh) {
@@ -4853,7 +4911,15 @@
       drawBubble(kx, GROUND_Y - 215, intro.king || KING_LINE, 300, a);
     } else if (t > kingOut + 0.4) {
       const a = Math.min(1, (t - kingOut - 0.4) / 0.4, (introEnd - t) / 0.4);
-      drawBubble(player.x + player.w / 2, player.y - 24, intro.troll || TROLL_INTRO_LINE, 300, a);
+      drawBubble(
+        player.x + player.w / 2,
+        player.y - 24,
+        intro.troll || TROLL_INTRO_LINE,
+        300,
+        a,
+        0,
+        BUBBLE_FILL_TROLL
+      );
     }
 
     // skip hint (screen space, unaffected by camera — camera is 0 here anyway)
@@ -5310,6 +5376,7 @@
     artifactsTaken = LEVELS.map(() => false);
     realmBossDefeated = LEVELS.map(() => false);
     hasNoticedHorizonOutline = false;
+    hasAutoTalkedFirstTree = false;
     levelEnemyState = LEVELS.map(() => null);
     levelCandyState.forEach((arr) => arr.fill(false));
     levelHeartState.forEach((arr) => arr.fill(false));

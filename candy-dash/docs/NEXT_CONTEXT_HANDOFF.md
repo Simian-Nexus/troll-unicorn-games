@@ -5,6 +5,24 @@ picking up Candy Dash work; it's the "what's true right now" doc. `GAME_BIBLE.md
 is canon/lore, `CANDY_DASH_2_PLAN.md` is the full phase-by-phase history — this
 file is the short version plus the one urgent housekeeping item (git).
 
+> **2026-07-21 (latest): 1-1's first window-tree now speaks automatically
+> once; tree and Troll dialogue bubbles have speaker tints.**
+> - The first talkable platform window-tree in `1-1 Into the Wood` now calls
+>   `sayTreeLine()` automatically when Troll enters the existing 160x220px
+>   tree-talk range. A run-wide `hasAutoTalkedFirstTree` latch prevents the
+>   introduction from repeating when Troll walks back past it or retries after
+>   already hearing it; it resets only on a genuinely new game.
+> - Dialogue now tracks its speaker. Tree lines use a very faint green fill
+>   (`rgba(243,252,244,0.96)`); Troll's normal lines, queued follow-ups, and
+>   intro line use a very faint orange fill (`rgba(255,247,239,0.96)`). Other
+>   speakers keep the existing near-white bubble.
+> - `node --check` passed and `npm run build` refreshed `dist/game.js`.
+>   Build is `2026-07-21.1`, `game.js?v=51`. The in-app browser was
+>   unavailable in this session, so the remaining check is a quick visual pass
+>   through 1-1 to confirm the trigger timing and subtle tint strength.
+> - Pre-existing uncommitted edits in `style.css` (wider menu how-to panel) and
+>   its `style.css?v=18` cache bump in `index.html` were preserved.
+
 > **2026-07-20 (even later session): boss redemption sequence — grounding,
 > ally rally, ally-survival line, World 1 stomp-purify opt-out.**
 > - **Boss floated during his own defeat.** `defeated-reptilian-boss.png`
