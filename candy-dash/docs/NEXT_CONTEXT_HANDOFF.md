@@ -5,6 +5,52 @@ picking up Candy Dash work; it's the "what's true right now" doc. `GAME_BIBLE.md
 is canon/lore, `CANDY_DASH_2_PLAN.md` is the full phase-by-phase history — this
 file is the short version plus the one urgent housekeeping item (git).
 
+> **2026-07-20 (even later session): boss redemption sequence — grounding,
+> ally rally, ally-survival line, World 1 stomp-purify opt-out.**
+> - **Boss floated during his own defeat.** `defeated-reptilian-boss.png`
+>   and `dejected_after_defeat.png` are the only two Saurosapien poses with
+>   real transparent padding below the painted figure (measured via
+>   PIL: 24% and 16.2% of image height respectively — every other pose is
+>   flush-cropped). drawEnemy() anchored by the raw canvas edge like every
+>   other sprite, so he visibly hovered above the ground with a gap under
+>   his plinth (Jonathan: "see how he is sitting in an unnatural
+>   location?"/screenshots of the prone pose floating over a blue plinth).
+>   Fixed with SAURO_DEFEATED_BOTTOM_PAD/SAURO_DEJECTED_BOTTOM_PAD constants
+>   that shift drawY down by the measured padding so the painted content —
+>   not the empty canvas below it — lands on the ground line.
+> - **Boss also had an upward launch he shouldn't have had.** purifyBoss()
+>   set `hopVy = -90` (copied from the ordinary-critter hop-away arc) then
+>   let gravity pull him back down over the 0.6s "falling" phase — a
+>   collapse should go down, not up. Jonathan: "don't make his prone
+>   position raise off the ground... I will animate it later." Removed the
+>   launch entirely and excluded isBoss from the hop/gravity physics tick
+>   altogether — he's grounded the instant he's purified and stays there,
+>   motionless, through the whole collapse. The prone→dejected transition
+>   is already a hard sprite swap (not a tween) once dialoguePhase reaches
+>   "translated" — that part didn't need touching, just the floating/launch.
+> - **Redeemed-line speech bubble never expired.** drawBossDialogue() drew
+>   the translated line every frame for as long as dialoguePhase stayed
+>   "translated" (forever — nothing else changes that phase). Added
+>   BOSS_TRANSLATED_LINE_DURATION (10s) + a fade-out over the last
+>   BOSS_TRANSLATED_FADE_OUT (0.6s).
+> - **New: purified critters rally to fight the boss with you.** Once a
+>   level's boss wakes and starts hunting Troll, any critter already
+>   redeemed that level stops local wandering, closes in on the boss, and
+>   lands real chip damage (ALLY_ATTACK_DAMAGE) on a cooldown — can finish
+>   him off outright. If the boss's bolt catches one, it plays the same
+>   real hop-away/die sequence as an accidental kill (new bossHitAlly(),
+>   cloned off killRedeemedCritter() minus the self-blame OOPS line). If any
+>   die that way, Troll gets a line — ALLY_SURVIVAL_LINE, "I'm pretty sure
+>   those helpful critters are going to be alright." — queued the moment the
+>   boss settles into his dejected pose.
+> - **World 1 opts out of head-stomp purification.** The 2026-07-20
+>   head-stomp feature (below) now skips entirely when `themeName ===
+>   "forest"` — World 1 critters can only be purified by the horn, matching
+>   the existing "World 1 never gets the gentle purify" split used
+>   elsewhere in this file. Jonathan: "make it so you can't jump on
+>   critters to heal them in world 1 only."
+> - Build bumped to game.js?v=50, dist/game.js rebuilt. **Not yet uploaded.**
+
 > **2026-07-20 (latest, newest session): trunk-tree "next door tree bleed"
 > fixed for real — six individually hand-cropped tree images replace the
 > shared sheet, not another automated-crop attempt.**

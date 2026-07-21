@@ -560,6 +560,11 @@
   let sauroDejectedImg = null;
   loadImg("assets/enemies/Saurosapiens/Type_1/defeated-reptilian-boss.png", (img) => (sauroDefeatedImg = img));
   loadImg("assets/enemies/Saurosapiens/Type_1/dejected_after_defeat.png", (img) => (sauroDejectedImg = img));
+  // Measured via PIL against the actual pixel data (unlike every other
+  // Saurosapien pose, these two carry real transparent padding below the
+  // painted figure) — see the bottomPad use in drawEnemy().
+  const SAURO_DEFEATED_BOTTOM_PAD = 261 / 1086;
+  const SAURO_DEJECTED_BOTTOM_PAD = 249 / 1536;
   // Cache of {img,x,w,h} ground-shelf segments spanning the current level,
   // rebuilt lazily (see drawGroundBand) once art has loaded and whenever
   // levelWidth changes — random per-segment choice from groundTilePool.
@@ -960,6 +965,18 @@
   // visibly fills with life as you cleanse it.
   const HEALED_WANDER_SPEED = 25;
   const HEALED_WANDER_RANGE = 90; // half-width of the wander patrol
+  // Once a level's boss wakes up and starts hunting Troll, any critters
+  // already redeemed this level rally to him instead of pottering locally —
+  // they close in on the boss and take their own swings at it (Jonathan,
+  // 2026-07-20: "let a critter live and it fights the boss with you"). The
+  // boss can shoot them down like anything else; if he does, Troll gets a
+  // line about it once the boss falls (see ALLY_SURVIVAL_LINE below).
+  const ALLY_FOLLOW_SPEED = 100;
+  const ALLY_ATTACK_RANGE = 55;
+  const ALLY_ATTACK_COOLDOWN = 1.6;
+  const ALLY_ATTACK_DAMAGE = 1;
+  const ALLY_SURVIVAL_LINE =
+    "I'm pretty sure those helpful critters are going to be alright.";
 
   // From World 2 onward, a redeemed BRUTE isn't safe forever: he starts
   // flashing (corruption creeping back in) and fully re-corrupts after
@@ -1654,6 +1671,7 @@
     score,
     crittersRedeemed,
     crittersLost,
+    alliesLostToBoss,
     runPlayTime,
     lastTime;
   // Run-wide progress (survives level loads within one run, reset by startGame)
@@ -2005,6 +2023,7 @@
         : null;
     artifactCollected = artifactsTaken[idx] || !lvl.artifact;
     bossDefeated = false;
+    alliesLostToBoss = 0;
     portalActivating = false;
     portalActivateTimer = 0;
     portalBeamFired = false;
@@ -2337,6 +2356,24 @@
     beep(200, 0.2, "sawtooth", 0.05);
   }
 
+  // Same real hop-away/die sequence as killRedeemedCritter(), but for an
+  // ally shot down by the BOSS mid-fight rather than Troll's own mistaken
+  // bolt — no OOPS line here (that's Troll blaming himself for his own aim);
+  // this just tallies toward ALLY_SURVIVAL_LINE once the boss falls.
+  function bossHitAlly(target, boss) {
+    spawnPurifySparkles(target, 6);
+    target.healed = false;
+    target.purifying = true;
+    target.purifyDuration = PURIFY_DURATION;
+    target.purifyTimer = PURIFY_DURATION;
+    target.hopVy = -140;
+    target.hopVx = (target.x < boss.x ? -1 : 1) * 45;
+    target.finalDeath = true;
+    crittersLost += 1;
+    alliesLostToBoss += 1;
+    beep(200, 0.2, "sawtooth", 0.05);
+  }
+
   // A bolt hitting a redeemed BRUTE while its relapse timer is still running
   // reinforces the purification instead of hurting it — two such shots
   // cancel the relapse for good. Returns true if the bolt should be consumed.
@@ -2372,11 +2409,17 @@
     target.purifying = true;
     target.purifyDuration = BOSS_PURIFY_DURATION;
     target.purifyTimer = BOSS_PURIFY_DURATION;
-    target.hopVy = -90;
+    target.hopVy = 0;
     target.hopVx = 0;
     // Redemption, not a kill (canon, GAME_BIBLE §3/§5): he collapses, then
     // sits up dejected but free of corruption — see drawEnemy()'s
-    // isBoss+purifying branch and the defeatPhase tick in update().
+    // isBoss+purifying branch and the defeatPhase tick in update(). He's
+    // grounded immediately (no upward hop/launch, no gravity arc — see the
+    // isBoss skip in the physics tick below): the collapse is a straight
+    // cut to the prone pose, lying flat on the ground, not a bounce.
+    // Jonathan, 2026-07-20: "don't make his prone position raise off the
+    // ground" — he'll animate the actual collapse himself later.
+    target.y = GROUND_Y - target.h;
     target.defeatPhase = "falling";
     target.defeatPhaseT = BOSS_DEFEAT_FALL_TIME;
     score += 200;
@@ -2653,15 +2696,46 @@
       !intro &&
       Math.abs(player.x + player.w / 2 - artifact.x) < ARTIFACT_GUARD_RADIUS &&
       Math.abs(player.y + player.h / 2 - artifact.y) < 340;
+    // Once the level's boss is up and hunting Troll, any already-redeemed
+    // critters rally to him instead of pottering locally (see ALLY_FOLLOW_
+    // SPEED above). Only relevant while he's still actually fightable.
+    const boss = obstacles.find((b) => b.isBoss);
+    const bossFightActive = !!(boss && boss.aggro && !boss.purifying);
     for (const o of obstacles) {
       if (o.hitFlash > 0) o.hitFlash = Math.max(0, o.hitFlash - dt);
       if (o.purifying) continue;
       if (o.healed) {
-        // Healed critters just potter about their little patch — no aggro,
-        // no collision, no projectiles. Drones bob gently in the air.
-        o.x += o.vx * dt;
-        if (o.x < o.wanderMin) o.vx = Math.abs(o.vx);
-        else if (o.x + o.w > o.wanderMax) o.vx = -Math.abs(o.vx);
+        o.followingBoss = bossFightActive;
+        if (bossFightActive) {
+          // Close in on the boss and take their own swings at him — real
+          // chip damage, on a per-critter cooldown so a swarm can't melt
+          // him instantly.
+          const targetX = boss.x + boss.w / 2 - o.w / 2;
+          const dist = targetX - o.x;
+          if (Math.abs(dist) > ALLY_ATTACK_RANGE) {
+            const dir = Math.sign(dist);
+            o.x += dir * ALLY_FOLLOW_SPEED * dt;
+            o.vx = dir * ALLY_FOLLOW_SPEED;
+          } else {
+            o.vx = 0;
+            o.attackTimer = (o.attackTimer || 0) - dt;
+            if (o.attackTimer <= 0) {
+              o.attackTimer = ALLY_ATTACK_COOLDOWN;
+              o.attackFlash = 0.25;
+              boss.hitFlash = 0.15;
+              boss.hp -= ALLY_ATTACK_DAMAGE;
+              beep(500, 0.08, "square", 0.04);
+              if (boss.hp <= 0 && !boss.purifying) purifyBoss(boss);
+            }
+          }
+          if (o.attackFlash > 0) o.attackFlash = Math.max(0, o.attackFlash - dt);
+        } else {
+          // Healed critters just potter about their little patch — no
+          // aggro, no collision, no projectiles. Drones bob gently in the air.
+          o.x += o.vx * dt;
+          if (o.x < o.wanderMin) o.vx = Math.abs(o.vx);
+          else if (o.x + o.w > o.wanderMax) o.vx = -Math.abs(o.vx);
+        }
         if (o.kind === "drone")
           o.y = o.homeY + Math.sin(elapsed * 1.5 + o.x * 0.01) * 10;
         // Brutes only: redemption isn't locked in until reinforced — he
@@ -2920,6 +2994,9 @@
           o.hopVy = 0;
           o.y = GROUND_Y - o.h;
           startBossDialogue(o);
+          if (alliesLostToBoss > 0) {
+            dialogueQueue.push({ text: ALLY_SURVIVAL_LINE, duration: DIALOGUE_DURATION });
+          }
         }
       }
       if (o.isBoss && o.dialoguePhase) {
@@ -2934,9 +3011,10 @@
           o.dialogueT = 0;
         }
       }
-      // A dejected boss stops moving entirely — the hop-and-settle physics
-      // below is for the brief collapse only.
-      if (!(o.isBoss && o.defeatPhase === "dejected")) {
+      // The boss never hops (see purifyBoss: he's grounded the instant he's
+      // defeated and stays there, prone then dejected, no arc/rise) — only
+      // ordinary critters use this hop-and-settle physics.
+      if (!o.isBoss) {
         o.hopVy += GRAVITY * 0.35 * dt;
         o.y += o.hopVy * dt;
         o.x += o.hopVx * dt;
@@ -2972,10 +3050,12 @@
     // critter and bounces Troll instead of falling through into the
     // contact-damage check right below (which skips anything now
     // o.purifying/o.healed, so there's no double-hit the same frame).
+    // World 1 opts out (Jonathan, 2026-07-20): the horn is the only way to
+    // purify there — stomping just falls through to normal contact damage.
     const stompPad = 14;
     const stompBand = 16;
     for (const o of obstacles) {
-      if (o.purifying || o.healed || o.isBoss) continue;
+      if (o.purifying || o.healed || o.isBoss || themeName === "forest") continue;
       const footY = player.y + player.h;
       if (
         player.vy > 0 &&
@@ -3046,6 +3126,27 @@
       if (!p.noGravity) p.vy += GRAVITY * 0.55 * dt;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
+      // A boss bolt can catch an ally that's closed in to fight him instead
+      // of Troll — same real hop-away/die sequence as any other lost
+      // critter (bossHitAlly), tallied so Troll can comment on it once the
+      // boss falls (ALLY_SURVIVAL_LINE).
+      if (p.bossBolt) {
+        const shooter = obstacles.find((b) => b.isBoss);
+        const hitAlly = obstacles.find(
+          (o) =>
+            o.healed &&
+            o.followingBoss &&
+            p.x + p.r > o.x &&
+            p.x - p.r < o.x + o.w &&
+            p.y + p.r > o.y &&
+            p.y - p.r < o.y + o.h
+        );
+        if (hitAlly) {
+          p.hit = true;
+          bossHitAlly(hitAlly, shooter || hitAlly);
+          continue;
+        }
+      }
       const dx = player.x + player.w / 2 - p.x;
       const dy = player.y + player.h / 2 - p.y;
       if (Math.hypot(dx, dy) < p.r + projPad) {
@@ -3842,7 +3943,19 @@
       const bob =
         o.isBoss && o.defeatPhase === "dejected" ? 0 : Math.sin((elapsed + o.x * 0.03) * 6) * 2;
       const drawX = o.x + o.w / 2 - drawW / 2;
-      const drawY = o.y + o.h - drawH + bob;
+      // The two boss-defeat images (unlike every other pose here, all
+      // flush-cropped) carry real transparent padding below the painted
+      // pose — measured via PIL: defeated-reptilian-boss.png 24%,
+      // dejected_after_defeat.png 16.2% of image height. Anchoring by the
+      // raw canvas edge (like every other sprite) left him visibly floating
+      // above the ground wherever he was purified (Jonathan, 2026-07-20:
+      // "see how he is sitting in an unnatural location?"). Shift the draw
+      // rect down by that padding so the actual painted content — not the
+      // empty canvas below it — lands on o.y + o.h.
+      const bottomPad =
+        sprite === sauroDefeatedImg ? SAURO_DEFEATED_BOTTOM_PAD :
+        sprite === sauroDejectedImg ? SAURO_DEJECTED_BOTTOM_PAD : 0;
+      const drawY = o.y + o.h - drawH + bob + drawH * bottomPad;
       ctx.save();
       // Ordinary critters fade out on their purifyTimer as they either
       // convert to a "healed" sprite or disappear; the boss never does
@@ -4525,19 +4638,33 @@
   // the saurosapien language text box glow green and be replaced with the
   // english"), fading over BOSS_TRANSLATED_GLOW_FADE.
   const BOSS_TRANSLATED_GLOW_FADE = 0.6;
+  // The redeemed line has no other trigger to dismiss it (the boss just
+  // sits there afterward) — without a lifetime it stayed on screen for the
+  // rest of the level (Jonathan, 2026-07-20: "this dialog does not seem to
+  // disappear"). Fades out over the last BOSS_TRANSLATED_FADE_OUT seconds.
+  const BOSS_TRANSLATED_LINE_DURATION = 10;
+  const BOSS_TRANSLATED_FADE_OUT = 0.6;
   function drawBossDialogue(o) {
     const cx = o.x + o.w / 2;
     const topY = o.y - 8;
     if (o.dialoguePhase === "garbled") {
       drawBubble(cx, topY, BOSS_GARBLED_LINE, 300, 1);
-    } else if (o.dialoguePhase === "translated") {
+    } else if (
+      o.dialoguePhase === "translated" &&
+      o.dialogueT < BOSS_TRANSLATED_LINE_DURATION
+    ) {
       // No bubble during "spell" — that beat is Troll's (see drawTroll()'s
       // green glow, driven by player.spellGlowT), the boss just sits
       // silently through it.
       const lvl = LEVELS[currentLevelIndex];
       const line = (lvl.boss && lvl.boss.redeemedLine) || "...";
       const glow = Math.max(0, 1 - o.dialogueT / BOSS_TRANSLATED_GLOW_FADE);
-      drawBubble(cx, topY, line, 340, Math.min(1, o.dialogueT / 0.4), glow);
+      const fadeIn = Math.min(1, o.dialogueT / 0.4);
+      const fadeOut = Math.min(
+        1,
+        (BOSS_TRANSLATED_LINE_DURATION - o.dialogueT) / BOSS_TRANSLATED_FADE_OUT
+      );
+      drawBubble(cx, topY, line, 340, Math.min(fadeIn, fadeOut), glow);
     }
   }
 
@@ -5178,6 +5305,7 @@
     score = 0;
     crittersRedeemed = 0;
     crittersLost = 0;
+    alliesLostToBoss = 0;
     runPlayTime = 0;
     artifactsTaken = LEVELS.map(() => false);
     realmBossDefeated = LEVELS.map(() => false);
