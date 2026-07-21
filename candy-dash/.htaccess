@@ -1,0 +1,29 @@
+# Long-lived HTTP caching for static game assets (music, art, fonts).
+#
+# Jonathan, 2026-07-20: menu music wasn't playing and level-1 music started
+# late; part of the fix is warming/reusing Audio elements in game.js, but
+# the other half is making a RETURNING visit instant — right now the browser
+# re-fetches every .mp3/.png from the network on every page load because
+# nothing tells it these files are safe to keep. They are: music and art
+# under assets/ are immutable per filename — when Jonathan replaces one, the
+# convention here is a NEW filename or a cache-busting query string
+# (?v=/?av=, see index.html's game.js?v= and game.js's ASSET_VERSION), not
+# an in-place overwrite. So "cache forever, bust via URL" is safe.
+#
+# game.js/index.html/style.css are deliberately NOT covered here — those
+# change every session and are exactly what the ?v= cache-buster exists to
+# force a refetch of; a long Cache-Control on them would fight that.
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType audio/mpeg "access plus 1 year"
+  ExpiresByType audio/ogg "access plus 1 year"
+  ExpiresByType image/png "access plus 1 year"
+  ExpiresByType image/jpeg "access plus 1 year"
+  ExpiresByType image/webp "access plus 1 year"
+  ExpiresByType font/woff2 "access plus 1 year"
+</IfModule>
+<IfModule mod_headers.c>
+  <FilesMatch "\.(mp3|ogg|png|jpe?g|webp|woff2)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+</IfModule>

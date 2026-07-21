@@ -5,7 +5,7 @@
   // critters not despawning" reports on 2026-07-18 (the game.js?v= number
   // hadn't been bumped despite the file changing). Rendered by the
   // #build-version element (see index.html/style.css) in every screen state.
-  const BUILD_VERSION = "2026-07-20.2";
+  const BUILD_VERSION = "2026-07-20.21";
   const buildVersionEl = document.getElementById("build-version");
   if (buildVersionEl) buildVersionEl.textContent = "build " + BUILD_VERSION;
 
@@ -62,7 +62,7 @@
   const moveKnob = document.getElementById("move-knob");
   const jumpBtn = document.getElementById("jump-btn");
   const blastBtn = document.getElementById("blast-btn");
-  const crouchBtn = document.getElementById("crouch-btn");
+  const actionBtn = document.getElementById("action-btn");
   const healthFill = document.getElementById("health-fill");
   const shieldMeter = document.getElementById("shield-meter");
   const shieldFill = document.getElementById("shield-fill");
@@ -71,6 +71,7 @@
   const hudSettingsBtn = document.getElementById("hud-settings");
   const settingsDoneBtn = document.getElementById("settings-done");
   const setSound = document.getElementById("set-sound");
+  const setMusic = document.getElementById("set-music");
   const setVolume = document.getElementById("set-volume");
   const setSwap = document.getElementById("set-swap");
   const setSize = document.getElementById("set-size");
@@ -81,7 +82,7 @@
 
   // --- Settings (persisted) ------------------------------------------------
   const SETTINGS_KEY = "tu_candydash_settings";
-  let settings = { sound: true, volume: 0.7, swapSides: false, btnSize: 58 };
+  let settings = { sound: true, music: true, volume: 0.7, swapSides: false, btnSize: 58 };
   try {
     settings = Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
   } catch (e) {
@@ -94,6 +95,7 @@
     document.documentElement.style.setProperty("--ctrl-size", settings.btnSize + "px");
     touchControls.classList.toggle("swapped", settings.swapSides);
     setSound.checked = settings.sound;
+    setMusic.checked = settings.music;
     setVolume.value = String(settings.volume);
     setSwap.checked = settings.swapSides;
     setSize.value = String(settings.btnSize);
@@ -107,6 +109,17 @@
   // serving stale cached copies (style.css/game.js have their own ?v=).
   const ASSET_VERSION = 7;
   const av = (p) => p + "?av=" + ASSET_VERSION;
+
+  // Temporary diagnostic mode (Jonathan, 2026-07-20: "track where I am and
+  // when I click enter" — window-tree dialogue works locally but not on the
+  // Bluehost deploy). ?debug=1 turns on an on-screen readout (position +
+  // last interact()/Enter attempt and its outcome) and matching console
+  // logs, so a live discrepancy is visible without needing DevTools open.
+  // Safe to leave in permanently — it's inert unless the query param is
+  // set, so it can't affect normal play or leak onto the menu/HUD by
+  // accident. Remove once the tree-dialogue investigation is closed out.
+  const DEBUG = new URLSearchParams(location.search).get("debug") === "1";
+  let debugLastInteract = null; // { t, text } — set by tryTalkToTree()
 
   const idleSprite = new Image();
   idleSprite.src = av("assets/troll/troll-idle.png");
@@ -238,9 +251,27 @@
   // via PIL: first row from the top where opaque-pixel coverage exceeds 90%)
   // records where that flat line sits, so all segments align consistently
   // instead of each chunk's foliage tips floating at a different height.
+  // ground-2's real terrain shape (2026-07-20, Jonathan): a genuine sloped
+  // ramp rather than the flat walkable line every other ground tile has —
+  // up at an angle through the first quarter, a continued steep-but-still-
+  // walkable climb through the middle half, then down at an angle through
+  // the last quarter. Values are topFrac samples (same convention as
+  // surfaceFrac) evenly spaced 0..1 across the tile's width, alpha-scanned
+  // from the art with thin foliage sprigs (ferns/mushroom tips under ~14px
+  // wide) eroded out first so the line follows the actual walkable grass
+  // mass, not every decoration poking up above it. See platformSurfaceY's
+  // rampBump branch for how this gets interpolated at collision time.
+  const GROUND2_RAMP_PROFILE = [
+    0.503, 0.433, 0.406, 0.329, 0.224, 0.174, 0.133, 0.13, 0.111, 0.11, 0.084,
+    0.061, 0.049, 0.067, 0.061, 0.071, 0.137, 0.305, 0.368, 0.572, 0.624,
+  ];
   const groundTilePool = [
     { img: loadImg("assets/forest/terrain/ground-1.png"), surfaceFrac: 0.325 },
-    { img: loadImg("assets/forest/terrain/ground-2.png"), surfaceFrac: 0.567 },
+    {
+      img: loadImg("assets/forest/terrain/ground-2.png"),
+      surfaceFrac: 0.567,
+      rampProfile: GROUND2_RAMP_PROFILE,
+    },
     {
       img: loadImg("assets/forest/terrain/ground-3.png"),
       surfaceFrac: 0.14,
@@ -256,33 +287,158 @@
     },
   ];
   const branchTile = loadImg("assets/forest/terrain/branch.png");
+  // Real tileable dirt art (2026-07-19, Jonathan) — three seamless variants,
+  // swapped in for the procedural getDirtPattern() placeholder wherever
+  // forest-theme dirt is drawn (see FOREST_DIRT_TILES/getRealDirtPattern
+  // below). World 2/dunes has no dirt art yet, so it stays procedural.
+  const FOREST_DIRT_TILES = [
+    loadImg("assets/forest/terrain/dirt1.png"),
+    loadImg("assets/forest/terrain/dirt2.png"),
+    loadImg("assets/forest/terrain/dirt3.png"),
+  ];
   // Real platform-support art (2026-07-20, Jonathan), replacing the flat
   // brown-gradient trapezoid placeholder in drawPlatformConnector() below.
-  // Each is a 3x2 (trunk/ruins) or 2x4 (tree-tops) sprite sheet — see
-  // drawSpriteCell() and the connectorStyle/connectorVariant/treeTopVariant
-  // fields assigned per-platform in loadLevel(). Forest theme only; World
-  // 2's dunes still use the old procedural sandstone-pillar placeholder
-  // since no matching desert art exists yet.
-  const trunkSpritesImg = loadImg("assets/forest/trees/trunk-sprites.png");
-  const treeTopSpritesImg = loadImg("assets/forest/trees/tree-tops-sprites.png");
+  // Each sheet is a 3x2 grid — see drawSpriteCell() and the
+  // connectorStyle/connectorVariant fields assigned per-platform in
+  // loadLevel(). Forest theme only; World 2's dunes still use the old
+  // procedural sandstone-pillar placeholder since no matching desert art
+  // exists yet.
+  //
+  // Trunks use the "big and tall" whole-tree sheet (trunk+canopy already
+  // combined in one painting per cell) rather than compositing a separate
+  // trunk sprite with a separate tree-top sprite on top — the first attempt
+  // at this (two sheets glued together at runtime) never lined up cleanly:
+  // each cell's actual painted tree sits at a different offset within its
+  // transparent cell padding, so two independently-centered/bottom-anchored
+  // pieces drifted apart both horizontally and vertically. A single
+  // pre-composed tree sidesteps that entirely.
+  // Trunk trees are six SEPARATE pre-isolated images (2026-07-20, Jonathan),
+  // not a sliced grid sheet — a shared 3x2 sheet plus per-cell content-box
+  // cropping was tried first (see drawSpriteCell's cell-isolation comment
+  // below) and still let slivers of a neighbouring tree bleed in, because
+  // the source painting itself has overlapping detail (a dangling vine or
+  // lantern chain) crossing the nominal cell boundary — no coordinate-based
+  // crop can tell that apart from the tree it's cropping. Jonathan hand-cropped
+  // each tree out by eye instead, which can. Order matches the original
+  // sheet's reading order (index 0-5): hollow oak, tall oak, window/lantern
+  // oak, pine, mossy oak, birch.
+  const trunkTreeImgs = [1, 2, 3, 4, 5, 6].map((n) =>
+    loadImg(`assets/forest/trees/trees-to_render-big-and-tall-sprites - Copy ${n}.png`)
+  );
   const ruinSpritesImg = loadImg("assets/forest/ruins/ruins-sprites.png");
-  const TRUNK_SPRITE_GRID = { cols: 3, rows: 2 };
-  const TREE_TOP_SPRITE_GRID = { cols: 2, rows: 4 };
   const RUIN_SPRITE_GRID = { cols: 3, rows: 2 };
-  // Draws one cell of a {cols, rows} sprite sheet into an arbitrary
-  // destination box, bottom-anchored (dy is the BOTTOM of the box, since
-  // every caller here is placing something that stands on the ground/a
-  // platform) — scales to dh, honouring the cell's own aspect ratio, and
-  // returns the width actually drawn (dw is a cap, not a fixed width).
-  function drawSpriteCell(img, grid, index, cx, bottomY, dh, maxW) {
+  // Per-cell painted-content bounding boxes (cell-local pixels), measured
+  // once via PIL against the sheet's actual pixel data (transparent-pixel
+  // bbox scan) rather than guessed — every cell has a different amount of
+  // transparent padding, so treating the raw cell edges as the sprite's
+  // true top/bottom/center (the original approach) is what caused ruins to
+  // float above the ground and drift off-center from the platform they're
+  // meant to support. Re-measure and update these if the PNG is ever
+  // replaced/re-cropped. (Trunk trees no longer use this — see above.)
+  const RUIN_CONTENT_BOXES = [
+    { left: 97, top: 63, right: 455, bottom: 527 },
+    { left: 50, top: 172, right: 420, bottom: 528 },
+    { left: 22, top: 65, right: 367, bottom: 530 },
+    { left: 93, top: 70, right: 464, bottom: 457 },
+    { left: 86, top: 67, right: 482, bottom: 455 },
+    { left: 0, top: 69, right: 408, bottom: 451 },
+  ];
+  // How much taller than the platform's own ground-to-platform span a tree
+  // connector is drawn — see the "platform inside the branches" comment at
+  // its draw call in drawPlatformConnector().
+  const TREE_HEIGHT_BOOST = 1.5;
+  // Draws one cell of a {cols, rows} sprite sheet, anchoring the cell's
+  // actual PAINTED content (not its raw transparent-padded edges) so the
+  // result's true visual bottom sits at bottomY and its true visual
+  // horizontal center sits at cx. Height always maps exactly to dh (that's
+  // load-bearing — trunk/ruin height is how the connector reaches the
+  // platform it's holding up). Width normally follows the same scale
+  // (uniform, no distortion), but is independently clamped into
+  // [minW, maxW] when given — some of the tree variants are much narrower
+  // than others (a birch next to an oak, say), and a strictly
+  // aspect-preserved narrow one ends up looking like a platform balanced on
+  // a twig; `minW` widens just those without puffing up the ones that were
+  // already fine. `boxes[index]` supplies the measured content bounding box
+  // for that cell; omit it to anchor the whole raw cell instead (the
+  // original, padding-naive behaviour). Returns the content width actually
+  // drawn.
+  // Per-image cache of isolated per-cell canvases (see getSpriteCellCanvas)
+  // — keyed on the source Image so trunk/ruin sheets (which reuse the same
+  // 0-5 index range) never collide.
+  const spriteCellCache = new WeakMap();
+  // Cropping the SOURCE RECT of a big shared sheet (what drawSpriteCell did
+  // until now) still lets the canvas's own image-smoothing/downscale filter
+  // sample a texel or two *outside* that rect when the destination is much
+  // smaller than the source (common here — a ~500px painted tree scaled
+  // down to a ~150px platform connector) — the filter doesn't know the crop
+  // is meant to be a hard edge, so it blends in whatever's just past it in
+  // the sheet, i.e. a sliver of the next tree over. Still visible after the
+  // 2026-07-20 source-rect-cropping fix (Jonathan, same day, next report:
+  // "still next door image sprite artifacts on some rendering of trees").
+  // Fix: pre-slice the cell out to its own small offscreen canvas ONCE
+  // (containing only that cell's pixels, nothing adjacent to bleed from),
+  // cache it, and always draw/scale FROM that isolated canvas instead of
+  // the shared sheet — there is no neighbouring content left for any
+  // filter to sample, isolated or not.
+  function getSpriteCellCanvas(img, grid, index, box) {
+    let cellsForImg = spriteCellCache.get(img);
+    if (!cellsForImg) {
+      cellsForImg = new Map();
+      spriteCellCache.set(img, cellsForImg);
+    }
+    let cell = cellsForImg.get(index);
+    if (!cell) {
+      const cellW = img.naturalWidth / grid.cols;
+      const cellH = img.naturalHeight / grid.rows;
+      const col = index % grid.cols;
+      const row = Math.floor(index / grid.cols) % grid.rows;
+      const boxW = box.right - box.left;
+      const boxH = box.bottom - box.top;
+      const canvas = document.createElement("canvas");
+      canvas.width = boxW;
+      canvas.height = boxH;
+      canvas
+        .getContext("2d")
+        .drawImage(img, col * cellW + box.left, row * cellH + box.top, boxW, boxH, 0, 0, boxW, boxH);
+      cell = canvas;
+      cellsForImg.set(index, cell);
+    }
+    return cell;
+  }
+  function drawSpriteCell(img, grid, index, cx, bottomY, dh, maxW, boxes, minW) {
     const cellW = img.naturalWidth / grid.cols;
     const cellH = img.naturalHeight / grid.rows;
-    const col = index % grid.cols;
-    const row = Math.floor(index / grid.cols) % grid.rows;
-    let scale = dh / cellH;
-    let dw = cellW * scale;
-    if (maxW && dw > maxW) dw = maxW;
-    ctx.drawImage(img, col * cellW, row * cellH, cellW, cellH, cx - dw / 2, bottomY - dh, dw, dh);
+    const box = (boxes && boxes[index]) || { left: 0, top: 0, right: cellW, bottom: cellH };
+    const boxW = box.right - box.left;
+    const boxH = box.bottom - box.top;
+    const scaleY = dh / boxH;
+    let scaleX = scaleY;
+    if (maxW) scaleX = Math.min(scaleX, maxW / boxW);
+    if (minW) scaleX = Math.max(scaleX, minW / boxW);
+    const dw = boxW * scaleX;
+    const dhDraw = boxH * scaleY;
+    const dx = cx - dw / 2;
+    const dy = bottomY - dhDraw;
+    const cell = getSpriteCellCanvas(img, grid, index, box);
+    ctx.drawImage(cell, 0, 0, boxW, boxH, dx, dy, dw, dhDraw);
+    return dw;
+  }
+  // Same anchoring/scaling as drawSpriteCell, but for a whole standalone
+  // image (no grid, no content-box crop) — used for the individually
+  // hand-cropped trunk trees, which have nothing adjacent to bleed from in
+  // the first place since each is its own isolated file.
+  function drawWholeSprite(img, cx, bottomY, dh, maxW, minW) {
+    const boxW = img.naturalWidth;
+    const boxH = img.naturalHeight;
+    const scaleY = dh / boxH;
+    let scaleX = scaleY;
+    if (maxW) scaleX = Math.min(scaleX, maxW / boxW);
+    if (minW) scaleX = Math.max(scaleX, minW / boxW);
+    const dw = boxW * scaleX;
+    const dhDraw = boxH * scaleY;
+    const dx = cx - dw / 2;
+    const dy = bottomY - dhDraw;
+    ctx.drawImage(img, 0, 0, boxW, boxH, dx, dy, dw, dhDraw);
     return dw;
   }
   const redeemedLizard = loadImg("assets/forest/cutscene/redeemed-lizard.png");
@@ -321,7 +477,13 @@
   ];
   const dunesGroundPool = [
     { img: loadImg("assets/dunes/terrain/ground-1.png"), surfaceFrac: 0.325 },
-    { img: loadImg("assets/dunes/terrain/ground-2.png"), surfaceFrac: 0.567 },
+    {
+      img: loadImg("assets/dunes/terrain/ground-2.png"),
+      surfaceFrac: 0.567,
+      // Same silhouette as the forest tile (hue-shifted copy), so the same
+      // measured ramp applies unchanged — see GROUND2_RAMP_PROFILE.
+      rampProfile: GROUND2_RAMP_PROFILE,
+    },
     {
       img: loadImg("assets/dunes/terrain/ground-3.png"),
       surfaceFrac: 0.14,
@@ -348,6 +510,7 @@
       // not sky. Placeholder until real seamless ground-fill art exists.
       groundFillColor: "#3b2a20",
       connectorColors: ["#5a4126", "#3d2b1f"], // tree-trunk placeholder gradient
+      dirtPool: FOREST_DIRT_TILES,
     },
     dunes: {
       layers: dunesLayers,
@@ -515,6 +678,15 @@
     leaderboardList.classList.toggle("hidden", rows.length === 0);
   }
 
+  // Sparkles (Unicorn) has a lisp — every "s" comes out as "th" (matches the
+  // hand-written finale lines below, e.g. "Lookth like we haventh
+  // finithed..."). Applied once here so new Unicorn lines don't need to be
+  // hand-misspelled; Troll's own lines (MENU_QUOTES, OVER_QUOTES_TROLL,
+  // dialogueMessage bubbles) are unaffected.
+  function lisp(str) {
+    return str.replace(/s/gi, (m) => (m === "S" ? "Th" : "th"));
+  }
+
   const MENU_QUOTES = [
     '"Statistically, most of you will hit the first obstacle."',
     '"This is, in fact, a game. Not a spaceship. I checked."',
@@ -530,7 +702,7 @@
     '"Worth it. There was candy."',
     '"That drone tasted like betrayal."',
     '"Rainbows are an illusion. So is losing. Play again."',
-  ];
+  ].map(lisp);
 
   let audioCtx = null;
   function beep(freq, dur, type = "square", vol = 0.05) {
@@ -565,13 +737,71 @@
     const file = lvl.boss ? `Boss_${world}.mp3` : `World_${world}.mp3`;
     return `assets/Music/World_${world}/${file}`;
   }
+  // One real Audio element per distinct track, reused for the life of the
+  // page — see getMusicAudio()/preloadAllMusic() below. Every play*Music()
+  // function used to do `new Audio(src)` on every call, which threw away
+  // whatever the browser had already buffered for that src (from a previous
+  // visit to the same level, or from preloadAllMusic's warm-up) and started
+  // a brand new fetch/decode from scratch. Jonathan, 2026-07-20: "music
+  // needs to play as immediately as possible... if that means caching it
+  // for next time, that might be good." Reusing the element is the "next
+  // time" half of that — the src is unchanged so the browser's own HTTP
+  // cache still needs to cooperate for a real cross-session instant start
+  // (see the new .htaccess Cache-Control rules), but within one page load
+  // this makes revisiting a track (menu -> level -> back to menu, a retry,
+  // etc.) instant instead of re-buffering every time.
+  const musicCache = new Map(); // src -> HTMLAudioElement
+  const MENU_MUSIC_SRC = "assets/Music/Menu/Intro_Theme.mp3";
+  function getMusicAudio(src) {
+    let el = musicCache.get(src);
+    if (!el) {
+      // preload set before src is assigned so the browser's eager-fetch
+      // hint applies from the very first byte, not just on a later .load().
+      el = new Audio();
+      el.preload = "auto";
+      el.loop = true;
+      el.addEventListener("error", () => {
+        console.warn("Music failed to load:", src, el.error);
+      });
+      el.src = src;
+      musicCache.set(src, el);
+    }
+    return el;
+  }
   // Preloading of every distinct track happens once LEVELS actually exists —
   // see preloadAllMusic(), called right after the LEVELS array below (it
   // used to sit here and reference LEVELS before it was declared, a
   // temporal-dead-zone ReferenceError thrown at script load that silently
   // killed every button on the page, Play included — confirmed live 2026-07-18).
   function applyMusicVolume() {
-    if (currentMusic) currentMusic.volume = settings.sound ? settings.volume * MUSIC_VOLUME_SCALE : 0;
+    if (currentMusic) currentMusic.volume = settings.music ? settings.volume * MUSIC_VOLUME_SCALE : 0;
+  }
+  // Shared by playLevelMusic/playMenuMusic/playVictoryMusic — swaps
+  // currentMusic to the (cached, reused) element for `src` and starts it.
+  function switchMusic(src, failLabel) {
+    if (src === currentMusicSrc && currentMusic && !currentMusic.paused) return; // already playing this track
+    if (src === currentMusicSrc && currentMusic) {
+      // Same track, but a previous attempt never actually started (blocked
+      // or still loading) — just try again on the existing element instead
+      // of tearing down and recreating it.
+      currentMusic.play().catch((err) => {
+        console.warn(`${failLabel} playback blocked/failed:`, src, err);
+        armMusicUnlock();
+      });
+      return;
+    }
+    if (currentMusic) currentMusic.pause();
+    currentMusic = getMusicAudio(src);
+    currentMusicSrc = src;
+    applyMusicVolume();
+    // Autoplay can be blocked before a user gesture; loadLevel is always
+    // reached via Play/Retry/a level-exit walk, all user gestures, but
+    // Chrome has been observed rejecting it anyway — armMusicUnlock() covers
+    // that case by retrying on the next interaction of any kind.
+    currentMusic.play().catch((err) => {
+      console.warn(`${failLabel} playback blocked/failed:`, src, err);
+      armMusicUnlock();
+    });
   }
   function stopMusic() {
     if (currentMusic) currentMusic.pause();
@@ -604,56 +834,24 @@
       stopMusic();
       return;
     }
-    if (src === currentMusicSrc && currentMusic && !currentMusic.paused) return; // already playing this track
-    if (src === currentMusicSrc && currentMusic) {
-      // Same track, but a previous attempt never actually started (blocked
-      // or still loading) — just try again on the existing element instead
-      // of tearing down and recreating it.
-      currentMusic.play().catch((err) => {
-        console.warn("Music playback blocked/failed:", src, err);
-        armMusicUnlock();
-      });
-      return;
-    }
-    if (currentMusic) currentMusic.pause();
-    currentMusic = new Audio(src);
-    currentMusic.loop = true;
-    currentMusicSrc = src;
-    // Unlike the image loader (loadImg), a failed/blocked track would
-    // otherwise fail completely silently — log it so a missing file, a bad
-    // path, or a blocked-autoplay browser is actually diagnosable from the
-    // console instead of just "no music, no idea why".
-    currentMusic.addEventListener("error", () => {
-      console.warn("Music failed to load:", src, currentMusic.error);
-    });
-    applyMusicVolume();
-    // Autoplay can be blocked before a user gesture; loadLevel is always
-    // reached via Play/Retry/a level-exit walk, all user gestures, but
-    // Chrome has been observed rejecting it anyway — armMusicUnlock() covers
-    // that case by retrying on the next interaction of any kind.
-    currentMusic.play().catch((err) => {
-      console.warn("Music playback blocked/failed:", src, err);
-      armMusicUnlock();
-    });
+    switchMusic(src, "Music");
+  }
+  // Menu theme (2026-07-20, Jonathan) — plays behind the title screen only.
+  // loadLevel(0) at boot (see bottom of file) already starts World 1's own
+  // track so the menu's background level renders with something playing;
+  // this call right after it swaps that out for the real intro theme before
+  // the player ever sees/hears it. startGame()'s own loadLevel() call
+  // naturally replaces this with the right level track the moment Play is
+  // pressed, same as any other level-to-level music change.
+  function playMenuMusic() {
+    switchMusic(MENU_MUSIC_SRC, "Menu music");
   }
   // One-off track for the true final finale (see enterFinale) — not tied to
   // any level index, so it's a separate small function rather than a
   // musicSrcForLevel() case. Loops like level tracks do, so it doesn't go
   // silent while the player lingers filling in the leaderboard form.
   function playVictoryMusic() {
-    const src = "assets/Music/End_of_game_victory_music.mp3";
-    if (currentMusic) currentMusic.pause();
-    currentMusic = new Audio(src);
-    currentMusic.loop = true;
-    currentMusicSrc = src;
-    currentMusic.addEventListener("error", () => {
-      console.warn("Victory music failed to load:", src, currentMusic.error);
-    });
-    applyMusicVolume();
-    currentMusic.play().catch((err) => {
-      console.warn("Victory music playback blocked/failed:", src, err);
-      armMusicUnlock();
-    });
+    switchMusic("assets/Music/End_of_game_victory_music.mp3", "Victory music");
   }
 
   // --- Tuning --------------------------------------------------------------
@@ -703,6 +901,19 @@
   const PLAYER_MAX_HP = 10;
   const TOUCH_DAMAGE = { drone: 2, grunt: 2, spitter: 2, brute: 3 };
   const BOSS_TOUCH_DAMAGE = 4;
+  // Head-stomp redemption (2026-07-20, Jonathan): landing on top of a
+  // corrupted critter purifies it outright (no horn charge spent) and
+  // bounces Troll back into the air instead of him taking contact damage.
+  // Bosses are excluded — they keep their full horn-drain arc.
+  const STOMP_BOUNCE = -620;
+  const STOMP_LINES = [
+    "Stomping the bad out.",
+    "Pest control, Troll-style.",
+    "Bounce first, apologize later.",
+    "Head start on being nice.",
+    "That's for my shoes.",
+    "Boop. You're welcome.",
+  ];
   const SPIT_DAMAGE = 2; // spitter projectile
   const HURT_INVULN = 1.2; // seconds of post-hit invulnerability (Troll flickers)
   const HEART_HEAL = PLAYER_MAX_HP; // a heart fully restores Troll's life energy
@@ -830,6 +1041,22 @@
         { x: 1150, y: TIER1_Y - 120, big: true },
       ],
       artifact: { x: 1245, y: TIER1_Y - 60 },
+      // The outer treeline — Troll's first hollow tree, first contact with
+      // the wood's own voice.
+      treeVoice: {
+        inProgress: [
+          "You're barely past the treeline, stranger, and already the shadow flinches. Go deeper.",
+          "I felt the corruption reach this far only recently. You're not too late — not yet.",
+        ],
+        levelDone: [
+          "The edge of the wood is quiet again. It's been a long time since I heard birdsong out here.",
+          "You've cleared the threshold. The deep wood still needs you, though.",
+        ],
+        worldDone: [
+          "Even out here at the treeline, I can feel the whole forest breathing easy now. Thank you.",
+          "The Captain is freed, the wood is whole. Come back and visit sometime, stranger — no charging in required.",
+        ],
+      },
     },
     {
       name: "1-2 Deeper Roots",
@@ -869,6 +1096,20 @@
         { x: 2550, y: GROUND_Y - 40 },
       ],
       artifact: { x: 2080, y: TIER2_Y - 60 },
+      treeVoice: {
+        inProgress: [
+          "The roots run deep here, and so does the rot. Mind your step — it's not just the critters that are sick.",
+          "Something's wrong beneath the soil, stranger. I can feel it climbing the roots even now.",
+        ],
+        levelDone: [
+          "The roots breathe clean again, at least down this stretch. I didn't think I'd feel that again.",
+          "Whatever was creeping up through the ground here — it's gone quiet. For now.",
+        ],
+        worldDone: [
+          "The roots carry good news all the way to the Old Grove now. You did that.",
+          "Deep as these roots go, the healing reached every one of them. Thank you, stranger.",
+        ],
+      },
     },
     {
       name: "1-3 The Old Grove",
@@ -910,6 +1151,22 @@
         { x: 2380, y: TIER2_Y - 130, big: true },
       ],
       artifact: { x: 2380, y: TIER2_Y - 60 },
+      // The oldest and gravest voice in the wood — this grove remembers a
+      // time before the corruption had a name.
+      treeVoice: {
+        inProgress: [
+          "I am older than most trees you'll pass, stranger, and I have never felt corruption sit so heavy. Hurry.",
+          "The eldest of us remember when this grove was only ever quiet in a good way. Bring that back.",
+        ],
+        levelDone: [
+          "An old grove doesn't forgive easily, stranger — but it remembers kindness longer than most. Thank you.",
+          "The elders of this grove can rest now, if only for a while.",
+        ],
+        worldDone: [
+          "I have stood here since before the corruption had a name, and I will remember what you did here.",
+          "The whole wood owes the Old Grove's peace to you. We will tell it for generations.",
+        ],
+      },
     },
     {
       // Long gauntlet level — no artifact, just survival and platforming —
@@ -962,6 +1219,22 @@
         { x: 1770, y: TIER2_Y - 130, big: true },
       ],
       artifact: { x: 3145, y: TIER2_Y - 60 },
+      // The deepest, darkest tree before the Captain's arena — understandably
+      // more rattled than the others.
+      treeVoice: {
+        inProgress: [
+          "This is as deep and as dark as the wood gets, stranger. The Captain isn't far past here — be ready.",
+          "Even I don't like it this deep. Whatever's driving him, it's stronger the closer you get.",
+        ],
+        levelDone: [
+          "You made it through the Tangle. I didn't think anyone would, honestly.",
+          "It's still dark down here, but it's OUR dark again, not his.",
+        ],
+        worldDone: [
+          "Even the Tangled Deep sleeps easy with the Captain freed. I never thought I'd say that.",
+          "The darkest part of the wood, and it's the safest it's been in longer than I can count. Well done, stranger.",
+        ],
+      },
     },
     {
       name: "1-5 The Forest Captain",
@@ -1047,6 +1320,25 @@
         { x: 1440, y: TIER2_Y - 120, big: true },
       ],
       artifact: { x: 1515, y: TIER2_Y - 60 },
+      // World 2's hollow trees are canon "bleached bones of portal trees"
+      // (GAME_BIBLE §9) — dead wood, not living forest, so the voice inside
+      // is drier and wearier than World 1's, not a cheerful wood-spirit.
+      // This one talks right after Angus's "they're PATIENTS!" beat, so it's
+      // wary of Troll at first.
+      treeVoice: {
+        inProgress: [
+          "...A voice? Through bleached wood, out here? I didn't expect anyone to hear me. Careful — corruption doesn't wear kindly out here.",
+          "This sand used to be soil, stranger, before whatever they built here dried it out. Gently, now — the king was right about that much.",
+        ],
+        levelDone: [
+          "The sand's still hot, but the ache in it is a little less. Strange thing to feel from a dead tree, I know.",
+          "First patch of the dunes is quiet. It's not much, but it's something.",
+        ],
+        worldDone: [
+          "The whole dune sings different now that the Warden's free of it. Even bleached wood can feel that.",
+          "I didn't think I'd live — well, whatever this counts as — to see the sand go quiet. Thank you, stranger.",
+        ],
+      },
     },
     {
       name: "2-2 The Sunken Caravan",
@@ -1085,6 +1377,20 @@
         { x: 1950, y: TIER2_Y - 130, big: true },
       ],
       artifact: { x: 2015, y: TIER2_Y - 170 },
+      treeVoice: {
+        inProgress: [
+          "There was a caravan here once, stranger. Traders, mostly. Buried now, same as everything the occupation didn't want.",
+          "I remember wheels on this sand, not marching feet. Whatever's still down here, it's not friendly to either.",
+        ],
+        levelDone: [
+          "The caravan's bones can rest now. So can I, a little.",
+          "Whoever traded through here — their ghosts owe you one, if ghosts keep tabs.",
+        ],
+        worldDone: [
+          "The whole caravan route, all the way to the Warden's post — quiet, finally. I never thought I'd say that about this stretch of sand.",
+          "Trade might even come back through here someday, now that it's safe. Thank you.",
+        ],
+      },
     },
     {
       name: "2-3 Mirage Flats",
@@ -1126,6 +1432,21 @@
         { x: 1870, y: TIER2_Y - 120, big: true },
       ],
       artifact: { x: 2570, y: TIER2_Y - 60 },
+      // Heat-shimmer flats — unreliable narrator by nature, leans into it.
+      treeVoice: {
+        inProgress: [
+          "Don't trust everything you see out here, stranger — the heat lies, and so does whatever's corrupting these flats.",
+          "I've watched things that weren't there cross this sand for longer than I care to admit. At least YOU seem real.",
+        ],
+        levelDone: [
+          "The mirages are just heat again, nothing worse hiding in them. That's a relief I didn't expect to feel.",
+          "Hard to tell what's real out here most days. You clearing this place — that part's real.",
+        ],
+        worldDone: [
+          "Even the flats stopped lying to me, once the Warden let go of whatever he was holding onto. Thank you, stranger.",
+          "The whole desert feels less like a trick now. Strange thing for a mirage-choked flat to admit, but there it is.",
+        ],
+      },
     },
     {
       name: "2-4 The Bone Garden",
@@ -1178,6 +1499,22 @@
         { x: 1790, y: TIER2_Y - 130, big: true },
       ],
       artifact: { x: 3185, y: TIER2_Y - 60 },
+      // Last tree before the Warden's own post — knows exactly who and what
+      // is waiting up ahead, and asks Troll to go easy on him too.
+      treeVoice: {
+        inProgress: [
+          "They call this the Bone Garden for a reason, stranger. Whatever's guarding the Warden's post, it's close now — and it's tired, not evil. Remember that.",
+          "So many bones out here, and not all of them are old. Be careful — and be gentle, if you can.",
+        ],
+        levelDone: [
+          "The Garden's quiet now. Even bones deserve some peace.",
+          "Whatever was clinging to this place, it's let go. One step from the Warden himself now.",
+        ],
+        worldDone: [
+          "The Bone Garden was the last hard stretch before his post, and now even that's calm. You freed a soldier who'd been waiting for orders that were never coming, stranger. That's no small thing.",
+          "Bones don't forget kindness either, it turns out. Thank you.",
+        ],
+      },
     },
     {
       name: "2-5 The Dune Warden",
@@ -1235,16 +1572,31 @@
   // by the time any level actually wants one, there's a good chance it's
   // already fully downloaded from sitting idle in the background while the
   // player's still on the menu or an earlier level.
+  //
+  // Uses the SAME cached element getMusicAudio()/switchMusic() will later
+  // play from (not a disposable throwaway Audio, like before) — so the
+  // buffering this does isn't wasted the moment playback actually starts.
+  //
+  // The menu theme and World 1's own track are warmed FIRST and immediately
+  // (Jonathan, 2026-07-20: menu music wasn't playing at all, and level 1's
+  // was starting late) — those are the only two tracks a player can
+  // possibly hear in their first minute, so they shouldn't be competing for
+  // bandwidth against Worlds 2-5's tracks (2.7-4.7MB each) while the page's
+  // sprite/art assets are also loading. Everything else warms afterward,
+  // staggered so it doesn't open a burst of simultaneous connections either.
   (function preloadAllMusic() {
     const seen = new Set();
+    const priority = [MENU_MUSIC_SRC, musicSrcForLevel(LEVELS[0])].filter(Boolean);
+    const rest = [];
     LEVELS.forEach((lvl) => {
       const src = musicSrcForLevel(lvl);
-      if (!src || seen.has(src)) return;
+      if (!src || seen.has(src) || priority.includes(src)) return;
       seen.add(src);
-      const warm = new Audio();
-      warm.preload = "auto";
-      warm.src = src;
-      warm.load();
+      rest.push(src);
+    });
+    priority.forEach((src) => getMusicAudio(src).load());
+    rest.forEach((src, i) => {
+      setTimeout(() => getMusicAudio(src).load(), 500 * (i + 1));
     });
   })();
 
@@ -1291,7 +1643,13 @@
     pendingFinaleAt,
     dialogueMessage,
     dialogueTimer,
+    // Mirrors whichever duration dialogueTimer was actually set to (see
+    // drawDialogue's fade-in calc, which needs the true total, not just the
+    // hardcoded DIALOGUE_DURATION constant — tree lines run longer, see
+    // TREE_DIALOGUE_DURATION).
+    dialogueDurationTotal,
     dialogueCooldown,
+    dialogueQueue,
     elapsed,
     score,
     crittersRedeemed,
@@ -1300,6 +1658,15 @@
     lastTime;
   // Run-wide progress (survives level loads within one run, reset by startGame)
   let artifactsTaken = LEVELS.map(() => false);
+  // Which realms' bosses have been beaten this run, keyed by that boss
+  // level's own index (see realmBossIndexFor) — drives the window-tree
+  // dialogue's "world cleansed" tier. Set in enterFinale(), reset in
+  // startGame() alongside the other run-progress state above.
+  let realmBossDefeated = LEVELS.map(() => false);
+  // Fires once, appended after Troll's very first tree conversation of the
+  // run (any tree, any level) — see sayTreeLine(). Reset alongside the other
+  // run-progress state above.
+  let hasNoticedHorizonOutline = false;
   // Per-level enemy fates, so walking back through the mirrored stump (or
   // forward again later) doesn't respawn everything as if freshly corrupted.
   // levelEnemyState[idx] is null until that level has been visited once; once
@@ -1327,8 +1694,83 @@
   const input = { left: false, right: false, down: false };
   let moveAxis = 0; // analog left/right from the touch slide track, -1..1
   const DIALOGUE_DURATION = 2.4;
+  // Tree conversations (sayTreeLine) run longer than DIALOGUE_DURATION's
+  // quick beats (stomp lines, artifact-needed nag, etc.) — those are full
+  // sentences of lore/flavor text, and 2.4s wasn't enough time to actually
+  // read one before it vanished (Jonathan, 2026-07-20: "it disappears too
+  // fast").
+  const TREE_DIALOGUE_DURATION = 4.5;
   const DIALOGUE_COOLDOWN = 3;
   const NEED_ARTIFACT_LINE = "I have to find the artifact thingy first.";
+  // Flavor-only easter egg (2026-07-20, Jonathan): talking to the resident
+  // of any hollow tree gate (Enter key / touch ⏎ action button), whether or not
+  // it's the first visit, gets a line from whoever lives there — separate
+  // from the jump-triggered overlap that actually changes levels (see
+  // jump()). The line depends on how far Troll has actually gotten:
+  //   - still working on THIS tree's own level (its artifact not yet
+  //     found) -> IN_PROGRESS, a nod to the ongoing job, not thanks yet.
+  //   - this level's done but the realm's boss isn't beaten yet (e.g. he
+  //     walked back from level 5 to level 1's tree) -> LEVEL_DONE.
+  //   - the whole realm's boss is beaten -> WORLD_DONE, real gratitude.
+  // See tryTalkToTree() for how the tier and tree-owning level get picked,
+  // and realmBossDefeated/realmBossIndexFor for the run-progress tracking.
+  //
+  // Every level's own tree now has UNIQUE dialogue for each tier (see each
+  // LEVELS[] entry's `treeVoice` field, Jonathan 2026-07-20: "all trees with
+  // little windows in all worlds needs a conversation... unique set of
+  // possible things to say"). These three arrays are the FALLBACK only —
+  // used if a level doesn't define its own `treeVoice` (currently none do;
+  // this exists so a future World 3+ level added without custom tree
+  // dialogue still says something sensible instead of nothing).
+  const TREE_LINES_IN_PROGRESS = [
+    "The darkness still clings to some of our kin nearby... please, keep going.",
+    "I can feel them stirring — the corrupted ones. You're close, stranger.",
+    "Not all of us are free yet. Hurry, before the shadow digs in deeper.",
+    "I hear cries from the thicket still. Whatever you're doing, it's working — don't stop now.",
+  ];
+  const TREE_LINES_LEVEL_DONE = [
+    "Thank you, stranger, for cleansing this part of our home.",
+    "You've pushed the darkness back here, but I fear it runs deeper still.",
+    "This grove breathes easier now. Go — there is more of our world to save.",
+    "We are safe here, thanks to you. But something far worse waits ahead.",
+  ];
+  // One entry is a two-part exchange (tree asks a question, then Troll
+  // answers in his own voice) rather than a single line — followUp queues
+  // automatically, see the dialogueQueue draining in update().
+  const TREE_LINES_WORLD_DONE = [
+    "Thank you, stranger, for healing our world.",
+    "The shadow is gone from here, truly gone. We won't forget you.",
+    "Our world sings again because of you, stranger.",
+    {
+      text: "Thank you for healing our world, but I fear many other worlds are infected by this darkness. What is your name, stranger?",
+      followUp: "Spoozicm Gumwillows! Now I have worlds to heal!",
+    },
+  ];
+  // Troll's own aside, appended after his very first tree conversation of
+  // the run (any tier, any tree) — see hasNoticedHorizonOutline in
+  // sayTreeLine(). In-canon read on the parallax treetop layer's soft dark
+  // edge along the horizon (Jonathan, 2026-07-20: "this can be an artifact
+  // of the corruption").
+  const TROLL_HORIZON_OUTLINE_LINE =
+    "...Hang on. Why do the treetops out on the horizon look burnt around the edges? That's not just fog. That's corruption.";
+  // How close Troll needs to be to talk — generous and distance-based
+  // rather than a tight overlap box, since standing next to a sloped ground
+  // tile (ground-2's ramp, say) can leave him a bit further from a tree's
+  // own anchor point than flat ground would (Jonathan, 2026-07-20: "this is
+  // as close as he can get to the window").
+  const TREE_TALK_RANGE_X = 160;
+  const TREE_TALK_RANGE_Y = 220;
+  function pickTreeLine(pool) {
+    const entry = pool[Math.floor(Math.random() * pool.length)];
+    return typeof entry === "string" ? { text: entry, followUp: null } : entry;
+  }
+  // Boss levels are realm boundaries (see backExitPoint in loadLevel) — the
+  // next boss at or after a given level index is that level's realm boss.
+  function realmBossIndexFor(levelIdx) {
+    let i = levelIdx;
+    while (i < LEVELS.length && !LEVELS[i].boss) i++;
+    return i < LEVELS.length ? i : levelIdx;
+  }
   const PORTAL_ACTIVATE_DURATION = 1.7;
   const PORTAL_BEAM_HIT_AT = 1.0;
 
@@ -1339,7 +1781,14 @@
   // updateBossDialogue() and the isBoss branch of drawDialogue().
   const BOSS_GARBLED_LINE = "▓▒░ Ξ¥§∆⌐ ¿†ø⌐⌐...ø¥§ ░▒▓";
   const BOSS_DIALOGUE_GARBLED_HOLD = 2.4; // untranslated static, before the spell
-  const BOSS_DIALOGUE_SPELL_DURATION = 0.9; // green-glow translation beat
+  // Troll's translation spell (Jonathan, 2026-07-20): a full 4-second green
+  // glow around TROLL (not the boss — he waves his arms, see drawTroll())
+  // while the boss stays down/silent. Was 0.9s and centered on the boss;
+  // both changed per spec.
+  const BOSS_DIALOGUE_SPELL_DURATION = 4;
+  // Troll's reaction the moment the boss starts speaking gibberish — reused
+  // for any boss, any world (see startBossDialogue()).
+  const TROLL_TRANSLATION_SPELL_LINE = "Looks like we need a translation spell.";
 
   function makeEnemy(kind, x, patrolRange) {
     let e;
@@ -1440,6 +1889,10 @@
       doubleJumped: false,
       crouching: false,
       idleTimer: 0,
+      // Translation-spell glow (green, see startBossDialogue/BOSS_DIALOGUE_
+      // SPELL_DURATION) — counts down from the full spell duration to 0;
+      // drawTroll() renders the glow while this is > 0.
+      spellGlowT: 0,
     };
     platforms = lvl.platforms.map((p, i) => {
       // Deterministic per-platform pick (position-seeded, not Math.random())
@@ -1457,7 +1910,7 @@
         // Ruins are the rarer/"special" one — roughly 1 in 3.
         connectorStyle: seed % 3 === 0 ? "ruin" : "trunk",
         connectorVariant: seed % 6,
-        treeTopVariant: Math.floor(seed / 6) % 8,
+        dirtVariant: seed % 3,
       };
     });
     const savedEnemyState = levelEnemyState[idx];
@@ -1558,7 +2011,9 @@
     pendingFinaleAt = null;
     dialogueMessage = null;
     dialogueTimer = 0;
+    dialogueDurationTotal = DIALOGUE_DURATION;
     dialogueCooldown = 0;
+    dialogueQueue = [];
     // Story cutscenes are per-level data now (lvl.intro) — played once per
     // run, so a retry of the same level doesn't replay it.
     if (lvl.intro && !introSeen[idx]) {
@@ -1609,6 +2064,7 @@
         } else if (dialogueCooldown <= 0) {
           dialogueMessage = NEED_ARTIFACT_LINE;
           dialogueTimer = DIALOGUE_DURATION;
+          dialogueDurationTotal = DIALOGUE_DURATION;
           dialogueCooldown = DIALOGUE_COOLDOWN;
           beep(220, 0.15, "triangle", 0.04);
         }
@@ -1652,19 +2108,138 @@
     beep(1200, 0.18, "sawtooth", 0.06);
   }
 
-  // Kicks off once a boss settles into the "dejected" pose: he speaks in
-  // untranslated static first, then Troll's translation spell (green glow,
-  // see spawnBossSpellSparkles) reveals the real line. See
+  // The formal "do the thing in front of you" action — Enter on keyboard,
+  // the ⏎ button on touch. Both routes land here, so anything interactable
+  // (hollow trees today; levers, switches, NPCs later) gets wired in this
+  // one function and automatically works on both inputs.
+  function interact() {
+    if (state !== "playing") return;
+    tryTalkToTree();
+  }
+
+  // Talk to a nearby hollow tree (Enter key / touch ⏎ action button) — purely
+  // flavor, doesn't advance/rewind a level, and works at any point in the
+  // run, whether this is Troll's first time at this tree or the tenth.
+  // exitPoint is always THIS level's own tree; backExitPoint (when present)
+  // is the previous level's, so its "owning" level is currentLevelIndex-1 —
+  // that's what picks the dialogue tier below, not whichever level Troll
+  // currently happens to be standing in.
+  function debugTalk(text) {
+    if (!DEBUG) return;
+    debugLastInteract = { t: elapsed, text };
+    console.log("[tree-talk]", text);
+  }
+  // A platform's own connector tree is only a "window tree" — i.e. only
+  // talkable — when it's actually drawn with the ONE trunk variant that's
+  // painted with a lantern-hung hollow/window (index 2 of trunkTreeImgs,
+  // "trees-to_render-big-and-tall-sprites - Copy 3.png"; the other 5 trunk
+  // variants and all ruin pillars have no window to knock on). Mirrors the exact
+  // render gate in drawPlatformConnector() so this only ever says yes for a
+  // tree the player can actually SEE has a window (Jonathan, 2026-07-20,
+  // after finding he was trying to talk to a plain platform tree: "the tree
+  // i am at has a window... make every tree with a window talkable").
+  function isWindowTreePlatform(p) {
+    if (p.bridge || p.sink || p.groundBump || p.rampBump) return false;
+    if (themeName !== "forest") return false;
+    if (p.connectorStyle !== "trunk" || p.connectorVariant !== 2) return false;
+    return GROUND_Y > p.y + p.h * 0.5;
+  }
+  // Shared by every talkable tree (the level's own exit/entry tree AND any
+  // window-variant platform tree within it) — picks the line pool for
+  // levelIdx's progress tier and shows it. sourceLabel is debug-only, so a
+  // Bluehost-vs-local discrepancy shows which specific tree was hit.
+  function sayTreeLine(levelIdx, sourceLabel) {
+    const treeLvl = LEVELS[levelIdx];
+    const levelDone = artifactsTaken[levelIdx] || !treeLvl.artifact;
+    const worldDone = realmBossDefeated[realmBossIndexFor(levelIdx)];
+    // This level's own tree voice, if it has one (see each LEVELS[] entry's
+    // `treeVoice`) — falls back to the generic pools for any level that
+    // doesn't (see the TREE_LINES_* comment above). Every window tree in a
+    // level shares that level's voice/pool — narratively, it's the same
+    // wood speaking through whichever hollow Troll happens to be at.
+    const voice = treeLvl.treeVoice;
+    const pool = worldDone
+      ? (voice && voice.worldDone) || TREE_LINES_WORLD_DONE
+      : levelDone
+      ? (voice && voice.levelDone) || TREE_LINES_LEVEL_DONE
+      : (voice && voice.inProgress) || TREE_LINES_IN_PROGRESS;
+    const picked = pickTreeLine(pool);
+    dialogueMessage = picked.text;
+    dialogueTimer = TREE_DIALOGUE_DURATION;
+    dialogueDurationTotal = TREE_DIALOGUE_DURATION;
+    dialogueQueue = picked.followUp ? [{ text: picked.followUp, duration: TREE_DIALOGUE_DURATION }] : [];
+    if (!hasNoticedHorizonOutline) {
+      hasNoticedHorizonOutline = true;
+      dialogueQueue.push({ text: TROLL_HORIZON_OUTLINE_LINE, duration: TREE_DIALOGUE_DURATION });
+    }
+    beep(660, 0.14, "sine", 0.05);
+    debugTalk(
+      `talked to ${sourceLabel} (${treeLvl.name}, tier=${
+        worldDone ? "worldDone" : levelDone ? "levelDone" : "inProgress"
+      }): "${picked.text}"`
+    );
+  }
+  function tryTalkToTree() {
+    const px = player ? Math.round(player.x) : "?";
+    const py = player ? Math.round(player.y) : "?";
+    if (state !== "playing" || intro || puzzle) {
+      debugTalk(`skipped: state=${state} intro=${!!intro} puzzle=${!!puzzle}`);
+      return;
+    }
+    if (dialogueTimer > 0 || dialogueQueue.length) {
+      debugTalk(`skipped: dialogue already showing (timer=${dialogueTimer.toFixed(2)})`);
+      return;
+    }
+    const near = (pt) =>
+      pt &&
+      Math.abs(player.x + player.w / 2 - pt.x) < TREE_TALK_RANGE_X &&
+      Math.abs(player.y + player.h - pt.y) < TREE_TALK_RANGE_Y;
+    if (near(exitPoint)) return sayTreeLine(currentLevelIndex, "the level-exit tree");
+    if (near(backExitPoint)) return sayTreeLine(currentLevelIndex - 1, "the level-entry tree");
+    for (const p of platforms) {
+      if (!isWindowTreePlatform(p)) continue;
+      if (near({ x: p.x + p.w / 2, y: GROUND_Y })) {
+        return sayTreeLine(currentLevelIndex, `a platform window-tree at x=${Math.round(p.x)}`);
+      }
+    }
+    const dExit = exitPoint ? Math.round(Math.abs(player.x + player.w / 2 - exitPoint.x)) : null;
+    const dBack = backExitPoint
+      ? Math.round(Math.abs(player.x + player.w / 2 - backExitPoint.x))
+      : null;
+    debugTalk(
+      `no tree in range: player=(${px},${py}) exitPoint=${
+        exitPoint ? `(${exitPoint.x},${exitPoint.y}) dx=${dExit}` : "none"
+      } backExitPoint=${
+        backExitPoint ? `(${backExitPoint.x},${backExitPoint.y}) dx=${dBack}` : "none"
+      } range=${TREE_TALK_RANGE_X}x${TREE_TALK_RANGE_Y} (window-tree platforms nearby: ${
+        platforms.filter(isWindowTreePlatform).length
+      } in level)`
+    );
+  }
+
+  // Kicks off once a boss settles ("falling" phase ends): he speaks in
+  // untranslated static first (still lying down — drawEnemy() keeps the
+  // defeated/lying sprite through this and "spell"), then Troll's
+  // translation spell (green glow around TROLL, see spawnSpellSparkles and
+  // drawTroll()'s player.spellGlowT) reveals the real line, at which point
+  // the boss finally sits up into the dejected pose. See
   // BOSS_DIALOGUE_GARBLED_HOLD/BOSS_DIALOGUE_SPELL_DURATION and the phase
   // tick in update()'s purifying loop.
   function startBossDialogue(o) {
     o.dialoguePhase = "garbled";
     o.dialogueT = 0;
+    // Troll's own reaction line, said the instant the gibberish starts —
+    // separate bubble/timer system from the boss's own (drawBossDialogue),
+    // so the two coexist on screen without fighting over the same slot.
+    dialogueMessage = TROLL_TRANSLATION_SPELL_LINE;
+    dialogueTimer = DIALOGUE_DURATION;
+    dialogueDurationTotal = DIALOGUE_DURATION;
   }
 
-  function spawnBossSpellSparkles(o) {
-    const cx = o.x + o.w / 2;
-    const cy = o.y + o.h * 0.5;
+  // Spawns the green translation-spell sparkles at (cx, cy) — Troll's
+  // position during the "spell" phase (see the dialoguePhase tick in
+  // update()), not the boss's; he's the one casting it.
+  function spawnSpellSparkles(cx, cy) {
     for (let i = 0; i < 14; i++) {
       const a = Math.random() * Math.PI * 2;
       const speed = 60 + Math.random() * 70;
@@ -1757,6 +2332,7 @@
     crittersLost += 1;
     dialogueMessage = OOPS_LINES[Math.floor(Math.random() * OOPS_LINES.length)];
     dialogueTimer = DIALOGUE_DURATION;
+    dialogueDurationTotal = DIALOGUE_DURATION;
     dialogueCooldown = DIALOGUE_COOLDOWN;
     beep(200, 0.2, "sawtooth", 0.05);
   }
@@ -1828,6 +2404,7 @@
     // Realm-healed screen: per-boss-level title/quote, and if another world
     // follows, the button carries the run onward instead of restarting.
     const lvl = LEVELS[currentLevelIndex];
+    realmBossDefeated[currentLevelIndex] = true; // this level IS the boss level — drives window-tree dialogue tier
     finaleNextLevel = currentLevelIndex + 1 < LEVELS.length ? currentLevelIndex + 1 : null;
     if (lvl.finale) {
       if (finaleTitleEl) finaleTitleEl.textContent = lvl.finale.title;
@@ -1969,6 +2546,14 @@
       if (t < 0 || t > 1) return null;
       return p.y;
     }
+    if (p.rampBump) {
+      if (t < 0 || t > 1) return null;
+      const arr = p.rampProfile;
+      const u = t * (arr.length - 1);
+      const i = Math.min(arr.length - 2, Math.floor(u));
+      const frac = arr[i] + (arr[i + 1] - arr[i]) * (u - i);
+      return GROUND_Y + (frac - p.rampSurfaceFrac) * p.rampTileH + 3;
+    }
     // branch platform
     if (t < BRANCH_SOLID_MIN || t > BRANCH_SOLID_MAX) return null;
     const branch = theme().branch;
@@ -2004,7 +2589,14 @@
         const surfY = platformSurfaceY(p, cx);
         // Sinking platforms move away underfoot faster than one frame of
         // gravity, so give the re-land test their per-frame travel as slack.
-        const slack = p.sink ? 6 + SINK_RATE * dt + 2 : 6;
+        // ground-2's ramp rises much faster per pixel of x than gravity
+        // drops Troll per frame (that's the whole point — it's a steep
+        // climb), so the normal 6px slack made the "was I already at/above
+        // this surface" check fail mid-ascent and drop him through; a ramp
+        // has solid ground underneath by construction (it's part of the
+        // main floor, not a floating platform with empty space below it),
+        // so there's no clip-up-from-underneath case to guard against here.
+        const slack = p.sink ? 6 + SINK_RATE * dt + 2 : p.rampBump ? 60 : 6;
         // The penetration test needs the same forgiveness in the other
         // direction: standing still on a sink platform resets vy to 0 each
         // landed frame, so next frame's pure-gravity fall (~0.7px at 60fps)
@@ -2012,7 +2604,11 @@
         // ~1px) — footY >= surfY would fail every other frame, dropping
         // `grounded` to false and back, which read as Troll's sprite
         // flickering between idle and jump poses (confirmed live 2026-07-19).
-        const penetrationSlack = p.sink ? SINK_RATE * dt + 2 : 0;
+        // Same steep-slope reasoning as `slack` above, but for the downhill
+        // direction: without this, running down the last quarter (where the
+        // surface drops faster than one frame of gravity) would make Troll
+        // briefly go airborne every step instead of running smoothly downhill.
+        const penetrationSlack = p.sink ? SINK_RATE * dt + 2 : p.rampBump ? 60 : 0;
         if (surfY !== null && prevFootY <= surfY + slack && footY >= surfY - penetrationSlack) {
           player.y = surfY - player.h;
           landed = true;
@@ -2284,6 +2880,7 @@
     if (artifactsAssembled)
       player.shield = Math.min(SHIELD_MAX, player.shield + SHIELD_REGEN_PER_SEC * dt);
     if (player.shieldFlash > 0) player.shieldFlash -= dt;
+    if (player.spellGlowT > 0) player.spellGlowT -= dt;
     if (player.hurtTimer > 0) player.hurtTimer -= dt;
     if (piecesViewTimer > 0) piecesViewTimer -= dt;
     player.crouching = player.grounded && input.down;
@@ -2330,7 +2927,8 @@
         if (o.dialoguePhase === "garbled" && o.dialogueT >= BOSS_DIALOGUE_GARBLED_HOLD) {
           o.dialoguePhase = "spell";
           o.dialogueT = 0;
-          spawnBossSpellSparkles(o);
+          spawnSpellSparkles(player.x + player.w / 2, player.y + player.h * 0.5);
+          player.spellGlowT = BOSS_DIALOGUE_SPELL_DURATION;
         } else if (o.dialoguePhase === "spell" && o.dialogueT >= BOSS_DIALOGUE_SPELL_DURATION) {
           o.dialoguePhase = "translated";
           o.dialogueT = 0;
@@ -2369,6 +2967,34 @@
     // regardless of the finale-portal timing) has him stay, sitting
     // dejected, through the portal beat and into the finale scene.
     obstacles = obstacles.filter((o) => o.isBoss || !o.purifying || o.purifyTimer > 0);
+
+    // Head-stomp check runs first so a clean landing on top purifies the
+    // critter and bounces Troll instead of falling through into the
+    // contact-damage check right below (which skips anything now
+    // o.purifying/o.healed, so there's no double-hit the same frame).
+    const stompPad = 14;
+    const stompBand = 16;
+    for (const o of obstacles) {
+      if (o.purifying || o.healed || o.isBoss) continue;
+      const footY = player.y + player.h;
+      if (
+        player.vy > 0 &&
+        player.x + player.w - stompPad > o.x &&
+        player.x + stompPad < o.x + o.w &&
+        footY > o.y - stompBand &&
+        footY < o.y + o.h * 0.5
+      ) {
+        purify(o);
+        player.vy = STOMP_BOUNCE;
+        player.y = o.y - player.h;
+        player.grounded = false;
+        player.doubleJumped = false;
+        dialogueMessage = STOMP_LINES[Math.floor(Math.random() * STOMP_LINES.length)];
+        dialogueTimer = DIALOGUE_DURATION;
+        dialogueDurationTotal = DIALOGUE_DURATION;
+        beep(880, 0.12, "triangle", 0.06);
+      }
+    }
 
     const hitboxPad = 10;
     for (const o of obstacles) {
@@ -2549,13 +3175,25 @@
         } else if (dialogueCooldown <= 0) {
           dialogueMessage = NEED_PIECES_LINE;
           dialogueTimer = DIALOGUE_DURATION;
+          dialogueDurationTotal = DIALOGUE_DURATION;
           dialogueCooldown = DIALOGUE_COOLDOWN;
           beep(220, 0.15, "triangle", 0.04);
         }
       }
     }
 
-    if (dialogueTimer > 0) dialogueTimer -= dt;
+    if (dialogueTimer > 0) {
+      dialogueTimer -= dt;
+      // Sequential lines (e.g. the tree asking Troll's name, then his own
+      // reply) — once the current one's had its full time, advance to the
+      // next queued line instead of just going silent.
+      if (dialogueTimer <= 0 && dialogueQueue.length) {
+        const next = dialogueQueue.shift();
+        dialogueMessage = next.text;
+        dialogueTimer = next.duration;
+        dialogueDurationTotal = next.duration;
+      }
+    }
     if (dialogueCooldown > 0) dialogueCooldown -= dt;
     if (portal && bossDefeated) unicornEmerge += dt;
 
@@ -2584,6 +3222,7 @@
         } else if (dialogueCooldown <= 0) {
           dialogueMessage = NEED_ARTIFACT_LINE;
           dialogueTimer = DIALOGUE_DURATION;
+          dialogueDurationTotal = DIALOGUE_DURATION;
           dialogueCooldown = DIALOGUE_COOLDOWN;
           beep(220, 0.15, "triangle", 0.04);
         }
@@ -2630,6 +3269,7 @@
       if (dialogueCooldown <= 0) {
         dialogueMessage = NEED_ASSEMBLY_LINE;
         dialogueTimer = DIALOGUE_DURATION;
+        dialogueDurationTotal = DIALOGUE_DURATION;
         dialogueCooldown = DIALOGUE_COOLDOWN;
         beep(220, 0.15, "triangle", 0.04);
       }
@@ -2970,9 +3610,49 @@
           });
         }
       }
+      if (tile.rampProfile) {
+        // Same topFrac->y conversion as the flat groundBumps above, just
+        // sampled continuously across x instead of once per named bump —
+        // see platformSurfaceY's rampBump branch.
+        bumps.push({
+          x,
+          w,
+          h: 18,
+          rampBump: true,
+          rampProfile: tile.rampProfile,
+          rampSurfaceFrac: tile.surfaceFrac,
+          rampTileH: h,
+        });
+      }
       x += w;
     }
     return { strip, bumps };
+  }
+
+  // Ground-level candies/hearts are authored at a fixed height above flat
+  // GROUND_Y (e.g. "GROUND_Y - 40"), but which ground tile actually lands
+  // under a given x is random per level load — a ground-2 chunk's raised
+  // ramp can land right under one, leaving it embedded in the terrain
+  // (Jonathan, 2026-07-20: "troll could only walk over it"). Once the real
+  // per-level ground shape is known (bumps/ramps just built above), re-home
+  // each ground-band pickup to sit the same authored height above whatever
+  // the terrain actually does at its x, instead of above the flat line.
+  // Elevated-platform pickups (TIER1_Y/TIER2_Y) are well above GROUND_Y and
+  // never match a ground bump's x-span, so they're untouched.
+  function snapGroundPickups(bumps) {
+    if (!bumps.length) return;
+    const adjust = (items) => {
+      for (const it of items) {
+        const bump = bumps.find((b) => it.x >= b.x && it.x <= b.x + b.w);
+        if (!bump) continue;
+        const surfY = platformSurfaceY(bump, it.x);
+        if (surfY == null) continue;
+        const hover = GROUND_Y - it.y; // authored height above flat ground
+        it.y = surfY - hover;
+      }
+    };
+    adjust(candies.filter((c) => c.y > TIER1_Y));
+    adjust(hearts.filter((h) => h.y > TIER1_Y));
   }
 
   function drawGroundBand() {
@@ -2983,6 +3663,7 @@
         groundStripLevelWidth = levelWidth;
         groundStripTheme = themeName;
         platforms.push(...built.bumps);
+        snapGroundPickups(built.bumps);
       }
     }
     if (groundStrip) {
@@ -2996,7 +3677,8 @@
       // palette, closes every gap so the band reads as one continuous mass.
       // Swap for a real seamless vertical earth/rock texture later; nothing
       // else about this function needs to change when that happens.
-      ctx.fillStyle = theme().groundFillColor;
+      const [c0, c1] = theme().connectorColors;
+      ctx.fillStyle = getDirtFill(0, c0, theme().groundFillColor);
       ctx.fillRect(0, GROUND_Y, levelWidth, H - GROUND_Y);
       groundStrip.forEach((seg) => ctx.drawImage(seg.img, seg.x, seg.y, seg.w, seg.h));
     } else {
@@ -3110,9 +3792,15 @@
     if (o.isBoss && o.purifying) {
       // Redeemed, not destroyed (canon) — collapse pose, then the dejected
       // sit-up pose, never the old enlarged forest-guardian "brute" art.
+      // He stays DOWN (defeated/lying pose) through "falling", "garbled" and
+      // "spell" — only sits up into the dejected pose once the translation
+      // actually lands (dialoguePhase === "translated"). He used to sit up
+      // the instant defeatPhase flipped to "dejected", i.e. right as the
+      // gibberish started, which read as "getting up too fast" (Jonathan,
+      // 2026-07-20).
       const fallback = purifiedSprites[o.kind] || enemySprites[o.kind];
       sprite =
-        o.defeatPhase === "dejected"
+        o.defeatPhase === "dejected" && o.dialoguePhase === "translated"
           ? sauroDejectedImg || sauroDefeatedImg || fallback
           : sauroDefeatedImg || fallback;
       noMirror = true;
@@ -3148,7 +3836,11 @@
     if (sprite) {
       const drawH = o.h * 1.12;
       const drawW = drawH * (sprite.naturalWidth / sprite.naturalHeight);
-      const bob = Math.sin((elapsed + o.x * 0.03) * 6) * 2;
+      // A dejected/settled boss is anchored to the ground, not floating —
+      // the idle breathing bob every other enemy gets made him look like he
+      // was gently levitating while sitting (Jonathan, 2026-07-20).
+      const bob =
+        o.isBoss && o.defeatPhase === "dejected" ? 0 : Math.sin((elapsed + o.x * 0.03) * 6) * 2;
       const drawX = o.x + o.w / 2 - drawW / 2;
       const drawY = o.y + o.h - drawH + bob;
       ctx.save();
@@ -3303,6 +3995,114 @@
     ctx.restore();
   }
 
+  // Procedural dirt texture (2026-07-20, test pass): replaces the flat
+  // groundFillColor/connectorColors backstops with a speckled, tileable
+  // pattern generated from the same per-theme colour pair, so it needs no
+  // art file and still matches each world's palette. Cached per colour pair
+  // since it only needs to be built once. If Jonathan prefers real tileable
+  // dirt sprites instead, swap getDirtPattern's body for an Image-based
+  // ctx.createPattern() and leave every call site unchanged.
+  function shadeColor(hex, amount) {
+    const num = parseInt(hex.slice(1), 16);
+    const r = Math.max(0, Math.min(255, (num >> 16) + amount));
+    const g = Math.max(0, Math.min(255, ((num >> 8) & 0xff) + amount));
+    const b = Math.max(0, Math.min(255, (num & 0xff) + amount));
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+  }
+
+  function buildDirtTile(c0, c1) {
+    const size = 128;
+    const tile = document.createElement("canvas");
+    tile.width = size;
+    tile.height = size;
+    const tctx = tile.getContext("2d");
+    tctx.fillStyle = c1;
+    tctx.fillRect(0, 0, size, size);
+    // Every speck is drawn 9x (itself plus its 8 wrap-around offsets) so
+    // nothing gets cut off at a tile edge — the seam is invisible when the
+    // canvas repeats the pattern.
+    const wrapped = (draw) => {
+      for (const dx of [-size, 0, size]) {
+        for (const dy of [-size, 0, size]) draw(dx, dy);
+      }
+    };
+    for (let i = 0; i < 26; i++) {
+      const cx = Math.random() * size;
+      const cy = Math.random() * size;
+      const r = 8 + Math.random() * 16;
+      tctx.globalAlpha = 0.2 + Math.random() * 0.25;
+      tctx.fillStyle = Math.random() < 0.5 ? shadeColor(c1, -16) : shadeColor(c0, 14);
+      wrapped((dx, dy) => {
+        tctx.beginPath();
+        tctx.ellipse(cx + dx, cy + dy, r, r * (0.55 + Math.random() * 0.4), Math.random() * Math.PI, 0, Math.PI * 2);
+        tctx.fill();
+      });
+    }
+    tctx.globalAlpha = 1;
+    for (let i = 0; i < 140; i++) {
+      const cx = Math.random() * size;
+      const cy = Math.random() * size;
+      const r = 0.6 + Math.random() * 1.6;
+      tctx.fillStyle = Math.random() < 0.5 ? shadeColor(c1, -30) : shadeColor(c0, 22);
+      wrapped((dx, dy) => {
+        tctx.beginPath();
+        tctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2);
+        tctx.fill();
+      });
+    }
+    for (let i = 0; i < 8; i++) {
+      const cx = Math.random() * size;
+      const cy = Math.random() * size;
+      const r = 2.5 + Math.random() * 3;
+      wrapped((dx, dy) => {
+        tctx.fillStyle = shadeColor(c1, -40);
+        tctx.beginPath();
+        tctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2);
+        tctx.fill();
+        tctx.fillStyle = shadeColor(c0, 35);
+        tctx.beginPath();
+        tctx.arc(cx + dx - r * 0.3, cy + dy - r * 0.3, r * 0.35, 0, Math.PI * 2);
+        tctx.fill();
+      });
+    }
+    return tile;
+  }
+
+  const dirtPatternCache = {};
+  function getDirtPattern(c0, c1) {
+    const key = c0 + "|" + c1;
+    if (!dirtPatternCache[key]) {
+      dirtPatternCache[key] = ctx.createPattern(buildDirtTile(c0, c1), "repeat");
+    }
+    return dirtPatternCache[key];
+  }
+
+  // Real tileable dirt art (see FOREST_DIRT_TILES) takes over from the
+  // procedural pattern above wherever it's loaded. Source tiles are 320px
+  // square; scaled down so the repeat reads at roughly the same on-screen
+  // size as the procedural tile instead of one huge un-tiled swatch.
+  const realDirtPatternCache = {};
+  function getRealDirtPattern(img) {
+    if (!realDirtPatternCache[img.src]) {
+      const pat = ctx.createPattern(img, "repeat");
+      if (pat && pat.setTransform) pat.setTransform(new DOMMatrix().scale(0.4));
+      realDirtPatternCache[img.src] = pat;
+    }
+    return realDirtPatternCache[img.src];
+  }
+
+  // Themed dirt fill: real art when the current theme has loaded tile
+  // images (`variant` picks which one), otherwise the procedural
+  // placeholder built from `fallbackC0`/`fallbackC1`.
+  function getDirtFill(variant, fallbackC0, fallbackC1) {
+    const pool = theme().dirtPool;
+    if (pool && pool.length) {
+      const loaded = pool.filter((img) => img.complete && img.naturalWidth);
+      if (loaded.length) return getRealDirtPattern(loaded[variant % loaded.length]);
+    }
+    return getDirtPattern(fallbackC0, fallbackC1);
+  }
+
   // So a plain floating platform reads as "resting on a trunk/pillar rooted
   // in the ground" rather than debris hanging in mid-air. Bridges and
   // sinking-sand platforms are their own distinct floating mechanics and
@@ -3315,7 +4115,7 @@
   // art hasn't loaded yet, and unconditionally for World 2's dunes theme,
   // which has no matching desert art yet.
   function drawPlatformConnector(p) {
-    if (p.bridge || p.sink || p.groundBump) return;
+    if (p.bridge || p.sink || p.groundBump || p.rampBump) return;
     const topY = p.y + p.h * 0.5;
     if (GROUND_Y <= topY) return;
     const cx = p.x + p.w / 2;
@@ -3323,18 +4123,67 @@
 
     if (themeName === "forest") {
       if (p.connectorStyle === "ruin" && ruinSpritesImg.complete && ruinSpritesImg.naturalWidth) {
-        drawSpriteCell(ruinSpritesImg, RUIN_SPRITE_GRID, p.connectorVariant, cx, GROUND_Y, spanH, p.w * 1.15);
+        drawSpriteCell(ruinSpritesImg, RUIN_SPRITE_GRID, p.connectorVariant, cx, GROUND_Y, spanH, p.w * 1.15, RUIN_CONTENT_BOXES);
         return;
       }
-      if (p.connectorStyle === "trunk" && trunkSpritesImg.complete && trunkSpritesImg.naturalWidth) {
-        // Canopy first (background, wider than the platform, allowed to
-        // peek out either side) so the trunk and then branch.png's own
-        // walkable surface both draw on top of it.
-        if (treeTopSpritesImg.complete && treeTopSpritesImg.naturalWidth) {
-          const canopyH = spanH * 0.55;
-          drawSpriteCell(treeTopSpritesImg, TREE_TOP_SPRITE_GRID, p.treeTopVariant, cx, topY + canopyH * 0.55, canopyH, p.w * 2.6);
+      const trunkImg = trunkTreeImgs[p.connectorVariant];
+      if (p.connectorStyle === "trunk" && trunkImg && trunkImg.complete && trunkImg.naturalWidth) {
+        // One whole pre-composed tree (trunk+canopy), content-bbox anchored
+        // so its true trunk base sits on GROUND_Y and its true horizontal
+        // center sits on cx. Drawn taller than spanH (the platform's own
+        // height above ground) on purpose — Jonathan, 2026-07-20: a tree
+        // scaled to end exactly at the platform line just looks like it's
+        // standing under a shelf, not holding it; the canopy needs to rise
+        // past the platform's top edge and wrap around it so branch.png's
+        // walkable surface (drawn right after this, still occluding
+        // whatever's behind it at the platform line) reads as embedded IN
+        // the foliage. `minW` thickens the narrower variants (the birch,
+        // notably) so the platform doesn't look balanced on a twig; `maxW`
+        // is deliberately more conservative than an earlier pass (was
+        // p.w*3.2) — that let neighbouring platforms' trees grow wide
+        // enough to visibly overlap into each other on tightly-spaced
+        // levels (also caught live, 2026-07-20).
+        const treeH = spanH * TREE_HEIGHT_BOOST;
+        // Same neighbour-overlap problem as the fix above, but against the
+        // hollow tree-exit gate instead of another platform's own tree —
+        // tree-exit.png has almost no transparent padding (measured: its
+        // painted canopy spans ~98% of the image width), so it needs a real
+        // reserved half-width, not just a small margin (Jonathan, 2026-07-20,
+        // "next door tree bleed" — a platform tree right next to a level's
+        // exit/back-exit gate was visibly merging into it).
+        const GATE_HALF_W = 200;
+        let maxW = p.w * 2.3;
+        let minW = p.w * 1.3;
+        for (const gate of [exitPoint, backExitPoint]) {
+          if (!gate) continue;
+          const avail = (Math.abs(cx - gate.x) - GATE_HALF_W) * 2;
+          if (avail < maxW) maxW = Math.max(60, avail);
         }
-        drawSpriteCell(trunkSpritesImg, TRUNK_SPRITE_GRID, p.connectorVariant, cx, GROUND_Y, spanH, p.w * 1.15);
+        // Same neighbour-overlap reasoning as the gate check above, but
+        // against ANOTHER PLATFORM'S OWN gap instead of a level exit —
+        // without this, minW's guaranteed 1.3x-platform-width floor could
+        // exceed the actual empty space to a neighbouring platform, so the
+        // root visibly hung out over open air with nothing under it
+        // (Jonathan, 2026-07-20, screenshot: a tree "sort of floating" off
+        // its platform's edge — confirmed as a real, reproducible pattern
+        // across several levels via a static pass over every forest
+        // level's platform data, not a one-off). ROOT_MARGIN keeps a little
+        // visible empty air right at the gap's edge even when unconstrained
+        // — a root grown to the pixel-exact edge of a gap still reads a
+        // little unnatural.
+        const ROOT_MARGIN = 20;
+        let leftGap = Infinity;
+        let rightGap = Infinity;
+        for (const other of platforms) {
+          if (other === p || other.bridge || other.sink) continue;
+          if (other.x + other.w <= p.x) leftGap = Math.min(leftGap, p.x - (other.x + other.w));
+          else if (other.x >= p.x + p.w) rightGap = Math.min(rightGap, other.x - (p.x + p.w));
+        }
+        const leftAvail = p.w / 2 + Math.max(0, leftGap - ROOT_MARGIN);
+        const rightAvail = p.w / 2 + Math.max(0, rightGap - ROOT_MARGIN);
+        maxW = Math.min(maxW, Math.max(60, Math.min(leftAvail, rightAvail) * 2));
+        minW = Math.min(minW, maxW);
+        drawWholeSprite(trunkImg, cx, GROUND_Y, treeH, maxW, minW);
         return;
       }
     }
@@ -3343,22 +4192,27 @@
     const botW = Math.min(p.w * 0.5, 90);
     const [c0, c1] = theme().connectorColors;
     ctx.save();
-    const grad = ctx.createLinearGradient(0, topY, 0, GROUND_Y);
-    grad.addColorStop(0, c0);
-    grad.addColorStop(1, c1);
-    ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.moveTo(cx - topW / 2, topY);
     ctx.lineTo(cx + topW / 2, topY);
     ctx.lineTo(cx + botW / 2, GROUND_Y);
     ctx.lineTo(cx - botW / 2, GROUND_Y);
     ctx.closePath();
+    ctx.fillStyle = getDirtFill(p.dirtVariant || 0, c0, c1);
+    ctx.fill();
+    // Shading pass over the same path (source path survives a fill()) so the
+    // pillar still reads as tapered/lit from above, not a flat texture swatch.
+    ctx.globalCompositeOperation = "multiply";
+    const shade = ctx.createLinearGradient(0, topY, 0, GROUND_Y);
+    shade.addColorStop(0, "rgba(255,255,255,0.4)");
+    shade.addColorStop(1, "rgba(0,0,0,0.55)");
+    ctx.fillStyle = shade;
     ctx.fill();
     ctx.restore();
   }
 
   function drawPlatform(p) {
-    if (p.groundBump) return; // collision only — the ground art already shows this mound
+    if (p.groundBump || p.rampBump) return; // collision only — the ground art already shows this
     if (p.bridge) {
       // Procedural rope bridge: posts at each end, two sagging ropes, planks
       // following the same sag curve the collision uses.
@@ -3595,7 +4449,9 @@
   // Word-wrapped speech bubble with a tail pointing down at (cx, bottomY).
   // Text is deliberately large: the 960px canvas is squeezed onto phone
   // screens, so canvas-space fonts need to be ~2x what desktop would use.
-  function drawBubble(cx, bottomY, text, maxW, alpha) {
+  // `glow` (0..1, optional) adds a fading green outer glow to the bubble
+  // shape itself — used for the boss-dialogue garbled→translated swap.
+  function drawBubble(cx, bottomY, text, maxW, alpha, glow) {
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     ctx.font = "32px Segoe UI, sans-serif";
@@ -3620,12 +4476,19 @@
     for (const l of lines) boxW = Math.max(boxW, ctx.measureText(l).width);
     boxW += padX * 2;
     const boxH = lines.length * lineH + padY * 2;
-    // keep the bubble on screen horizontally (world space; camera is applied outside)
+    // Keep the bubble fully inside the play area on both axes (world space;
+    // camera is applied outside) — Troll standing near the top of a level
+    // (a high platform, the rope bridge, etc.) used to push the bubble's top
+    // above y=0 and clip it against the canvas edge (Jonathan, 2026-07-20).
     const bx = Math.max(cameraX + 8, Math.min(cameraX + W - boxW - 8, cx - boxW / 2));
-    const by = bottomY - boxH - 10;
+    const by = Math.max(8, Math.min(H - boxH - 8, bottomY - boxH - 10));
     ctx.fillStyle = "rgba(255,255,255,0.95)";
     ctx.strokeStyle = "#131d31";
     ctx.lineWidth = 2;
+    if (glow > 0) {
+      ctx.shadowColor = `rgba(90, 230, 140, ${Math.min(1, glow)})`;
+      ctx.shadowBlur = 26 * Math.min(1, glow);
+    }
     const r = 10;
     ctx.beginPath();
     ctx.moveTo(bx + r, by);
@@ -3643,6 +4506,7 @@
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+    ctx.shadowBlur = 0;
     ctx.fillStyle = "#131d31";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -3652,36 +4516,33 @@
     ctx.restore();
   }
 
-  // Untranslated static, then Troll's green translation-spell glow, then the
-  // real redeemed line — see startBossDialogue()/BOSS_GARBLED_LINE and the
-  // phase tick in update(). Called from drawEnemy() once a boss is dejected.
+  // Untranslated static ("garbled"), then a silent beat while Troll casts
+  // the translation spell ("spell", see drawTroll()'s green glow, driven by
+  // player.spellGlowT), then the real redeemed line ("translated") — see
+  // startBossDialogue()/BOSS_GARBLED_LINE and the phase tick in update().
+  // Called from drawEnemy() once a boss is dejected. The translated bubble
+  // itself briefly glows green as it swaps in (Jonathan, 2026-07-20: "make
+  // the saurosapien language text box glow green and be replaced with the
+  // english"), fading over BOSS_TRANSLATED_GLOW_FADE.
+  const BOSS_TRANSLATED_GLOW_FADE = 0.6;
   function drawBossDialogue(o) {
     const cx = o.x + o.w / 2;
     const topY = o.y - 8;
-    if (o.dialoguePhase === "spell") {
-      const t = o.dialogueT / BOSS_DIALOGUE_SPELL_DURATION;
-      ctx.save();
-      ctx.translate(cx, o.y + o.h * 0.5);
-      const r = o.h * (0.5 + t * 0.6);
-      const grad = ctx.createRadialGradient(0, 0, r * 0.2, 0, 0, r);
-      grad.addColorStop(0, `rgba(90, 230, 140, ${0.5 * (1 - t)})`);
-      grad.addColorStop(1, "rgba(90, 230, 140, 0)");
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(0, 0, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    } else if (o.dialoguePhase === "garbled") {
+    if (o.dialoguePhase === "garbled") {
       drawBubble(cx, topY, BOSS_GARBLED_LINE, 300, 1);
     } else if (o.dialoguePhase === "translated") {
+      // No bubble during "spell" — that beat is Troll's (see drawTroll()'s
+      // green glow, driven by player.spellGlowT), the boss just sits
+      // silently through it.
       const lvl = LEVELS[currentLevelIndex];
       const line = (lvl.boss && lvl.boss.redeemedLine) || "...";
-      drawBubble(cx, topY, line, 340, Math.min(1, o.dialogueT / 0.4));
+      const glow = Math.max(0, 1 - o.dialogueT / BOSS_TRANSLATED_GLOW_FADE);
+      drawBubble(cx, topY, line, 340, Math.min(1, o.dialogueT / 0.4), glow);
     }
   }
 
   function drawDialogue() {
-    const alpha = Math.min(1, dialogueTimer / 0.4, (DIALOGUE_DURATION - dialogueTimer) / 0.3 + 1);
+    const alpha = Math.min(1, dialogueTimer / 0.4, (dialogueDurationTotal - dialogueTimer) / 0.3 + 1);
     drawBubble(player.x + player.w / 2, player.y - 24, dialogueMessage, 320, alpha);
   }
 
@@ -4079,6 +4940,27 @@
       ctx.fill();
     }
 
+    // Translation-spell glow: Troll casting the spell that will let the
+    // defeated boss's gibberish come through in English (Jonathan,
+    // 2026-07-20 — see BOSS_DIALOGUE_SPELL_DURATION/player.spellGlowT). A
+    // pulsing green aura for the full spell duration, fading in/out at each
+    // end so it doesn't pop. A hand-drawn arm-wave animation will replace/
+    // augment this later; the glow alone reads fine as a placeholder.
+    if (player.spellGlowT > 0) {
+      const fadeIn = Math.min(1, (BOSS_DIALOGUE_SPELL_DURATION - player.spellGlowT) / 0.4);
+      const fadeOut = Math.min(1, player.spellGlowT / 0.4);
+      const sa = Math.min(fadeIn, fadeOut);
+      const pulse = 0.7 + Math.sin(elapsed * 9) * 0.3;
+      const grad = ctx.createRadialGradient(0, -h * 0.45, h * 0.15, 0, -h * 0.45, h * 0.95);
+      grad.addColorStop(0, `rgba(90, 230, 140, ${0.55 * sa * pulse})`);
+      grad.addColorStop(0.75, `rgba(90, 230, 140, ${0.3 * sa * pulse})`);
+      grad.addColorStop(1, "rgba(90, 230, 140, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, -h * 0.45, h * 0.95, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     if (player.hornCharge >= HORN_CHARGE_MAX) {
       const pulse = 0.6 + Math.sin(elapsed * 10) * 0.3;
       const gy = -h * 0.92;
@@ -4138,6 +5020,57 @@
     // screen-space overlays, unaffected by camera
     if (puzzle) drawPuzzle();
     else if (piecesViewTimer > 0) drawPiecesView();
+    if (DEBUG) drawDebugOverlay();
+  }
+
+  // Diagnostic-only (see DEBUG at the top of the file) — live position +
+  // distance-to-tree readout, plus the last interact()/Enter attempt and
+  // its outcome, so a Bluehost-vs-local discrepancy is visible without
+  // DevTools. Screen-space, always on top.
+  function drawDebugOverlay() {
+    const lines = [`build ${BUILD_VERSION}  level ${LEVELS[currentLevelIndex].name}`];
+    if (player) {
+      lines.push(`troll x=${Math.round(player.x)} y=${Math.round(player.y)}`);
+      if (exitPoint) {
+        const d = Math.round(Math.abs(player.x + player.w / 2 - exitPoint.x));
+        lines.push(`exitPoint (${exitPoint.x},${exitPoint.y}) dx=${d} ${d < TREE_TALK_RANGE_X ? "IN RANGE" : ""}`);
+      }
+      if (backExitPoint) {
+        const d = Math.round(Math.abs(player.x + player.w / 2 - backExitPoint.x));
+        lines.push(`backExitPoint (${backExitPoint.x},${backExitPoint.y}) dx=${d} ${d < TREE_TALK_RANGE_X ? "IN RANGE" : ""}`);
+      }
+      const windowTrees = platforms.filter(isWindowTreePlatform);
+      if (windowTrees.length) {
+        let nearest = null;
+        for (const p of windowTrees) {
+          const d = Math.round(Math.abs(player.x + player.w / 2 - (p.x + p.w / 2)));
+          if (!nearest || d < nearest.d) nearest = { d, x: Math.round(p.x + p.w / 2) };
+        }
+        lines.push(
+          `window trees in level: ${windowTrees.length}, nearest at x=${nearest.x} dx=${nearest.d} ${
+            nearest.d < TREE_TALK_RANGE_X ? "IN RANGE" : ""
+          }`
+        );
+      } else {
+        lines.push(`window trees in level: 0`);
+      }
+    }
+    if (debugLastInteract) {
+      lines.push(`[Enter ${(elapsed - debugLastInteract.t).toFixed(1)}s ago] ${debugLastInteract.text}`);
+    }
+    ctx.save();
+    ctx.font = "13px monospace";
+    const padX = 8,
+      padY = 6,
+      lineH = 16;
+    const boxW = Math.max(...lines.map((l) => ctx.measureText(l).width)) + padX * 2;
+    const boxH = lines.length * lineH + padY * 2;
+    ctx.fillStyle = "rgba(0,0,0,0.65)";
+    ctx.fillRect(4, 4, boxW, boxH);
+    ctx.fillStyle = "#7dff9c";
+    ctx.textBaseline = "top";
+    lines.forEach((l, i) => ctx.fillText(l, 4 + padX, 4 + padY + i * lineH));
+    ctx.restore();
   }
 
   function drawFinaleScene() {
@@ -4247,6 +5180,8 @@
     crittersLost = 0;
     runPlayTime = 0;
     artifactsTaken = LEVELS.map(() => false);
+    realmBossDefeated = LEVELS.map(() => false);
+    hasNoticedHorizonOutline = false;
     levelEnemyState = LEVELS.map(() => null);
     levelCandyState.forEach((arr) => arr.fill(false));
     levelHeartState.forEach((arr) => arr.fill(false));
@@ -4429,8 +5364,12 @@
   setSound.addEventListener("change", () => {
     settings.sound = setSound.checked;
     saveSettings();
-    applyMusicVolume();
     beep(880, 0.1, "sine", 0.06);
+  });
+  setMusic.addEventListener("change", () => {
+    settings.music = setMusic.checked;
+    saveSettings();
+    applyMusicVolume();
   });
   setVolume.addEventListener("input", () => {
     settings.volume = Number(setVolume.value);
@@ -4468,42 +5407,37 @@
     jump();
   });
 
-  function bindHold(el, onDown, onUp) {
-    el.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      onDown();
-    });
-    ["pointerup", "pointerleave", "pointercancel"].forEach((evt) =>
-      el.addEventListener(evt, (e) => {
-        e.preventDefault();
-        onUp();
-      })
-    );
-  }
-  bindHold(
-    crouchBtn,
-    () => (input.down = true),
-    () => (input.down = false)
-  );
-
   // Slide track: touch anywhere on it and slide left/right; distance from
-  // centre is analog speed. Pointer capture keeps it responsive even when
-  // the thumb wanders off the track mid-slide.
+  // centre is analog speed. Pull the thumb DOWN ~20px from where it first
+  // touched to crouch, ease back up to stand (the ▼ under the knob hints at
+  // this) — one thumb covers run + crouch. The threshold is relative to the
+  // initial touch, not the track's bottom edge, because the track sits only
+  // 16px above the screen edge — an absolute zone there would be a nearly
+  // untouchable sliver. Pointer capture keeps it responsive even when the
+  // thumb wanders off the track mid-slide.
+  const CROUCH_PULL_PX = 20;
+  let trackStartY = 0;
   function trackUpdate(e) {
     const r = moveTrack.getBoundingClientRect();
     let v = ((e.clientX - r.left) / r.width) * 2 - 1;
     v = Math.max(-1, Math.min(1, v));
     moveAxis = Math.abs(v) < 0.12 ? 0 : v; // small dead zone in the middle
+    const crouching = e.clientY - trackStartY > CROUCH_PULL_PX;
+    input.down = crouching;
+    moveTrack.classList.toggle("crouching", crouching);
     const maxShift = r.width / 2 - 30;
-    moveKnob.style.transform = `translateX(${v * maxShift}px)`;
+    moveKnob.style.transform = `translateX(${v * maxShift}px) translateY(${crouching ? 8 : 0}px)`;
   }
   function trackRelease() {
     moveAxis = 0;
+    input.down = false;
+    moveTrack.classList.remove("crouching");
     moveKnob.style.transform = "";
   }
   moveTrack.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     moveTrack.setPointerCapture(e.pointerId);
+    trackStartY = e.clientY;
     trackUpdate(e);
   });
   moveTrack.addEventListener("pointermove", (e) => {
@@ -4523,6 +5457,10 @@
     e.preventDefault();
     tryBlast();
   });
+  actionBtn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    interact();
+  });
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space" || e.code === "ArrowUp") {
@@ -4540,6 +5478,8 @@
       input.down = true;
     } else if (e.code === "KeyX") {
       tryBlast();
+    } else if (e.code === "Enter") {
+      interact();
     }
   });
   window.addEventListener("keyup", (e) => {
@@ -4562,5 +5502,6 @@
   crittersLost = 0;
   runPlayTime = 0;
   loadLevel(0);
+  playMenuMusic();
   requestAnimationFrame(loop);
 })();

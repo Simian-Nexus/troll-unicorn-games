@@ -5,6 +5,504 @@ picking up Candy Dash work; it's the "what's true right now" doc. `GAME_BIBLE.md
 is canon/lore, `CANDY_DASH_2_PLAN.md` is the full phase-by-phase history — this
 file is the short version plus the one urgent housekeeping item (git).
 
+> **2026-07-20 (latest, newest session): trunk-tree "next door tree bleed"
+> fixed for real — six individually hand-cropped tree images replace the
+> shared sheet, not another automated-crop attempt.**
+> - This bleed had already had two automated fixes earlier the same day
+>   (source-rect cropping to a measured content box, then isolating each
+>   cell into its own offscreen canvas so the scaling filter has nothing
+>   adjacent to sample) — Jonathan reported it was STILL visible after both.
+>   Root cause wasn't the renderer: the source painting itself has
+>   overlapping detail (a dangling vine/lantern chain) crossing the nominal
+>   cell boundary, which no coordinate-based bbox scan can distinguish from
+>   the tree it's cropping.
+> - Jonathan's fix: hand-cropped each of the 6 trees out of
+>   `trees-to_render-big-and-tall-sprites.png` by eye (via a numbered
+>   `- Copy.png` reference, then `- Copy 1.png` through `- Copy 6.png`, one
+>   isolated tree per file, order matching the sheet's original reading
+>   order: 1=hollow oak, 2=tall oak, 3=window/lantern oak, 4=pine, 5=mossy
+>   oak, 6=birch). Verified each file visually against the expected variant
+>   before wiring in — order matches `p.connectorVariant` (0-5) exactly.
+> - **Code changes** (game.js): `trunkSpritesImg` (single sheet) replaced
+>   with `trunkTreeImgs` (array of 6 individually loaded images);
+>   `TRUNK_SPRITE_GRID`/`TRUNK_CONTENT_BOXES` deleted (ruins' own
+>   `RUIN_SPRITE_GRID`/`RUIN_CONTENT_BOXES` untouched — ruins still use the
+>   shared-sheet approach and aren't reported as having this problem). New
+>   `drawWholeSprite()` alongside the existing `drawSpriteCell()` — same
+>   anchor/scale math, but for a standalone image with no grid/box slicing
+>   (nothing adjacent to bleed from in the first place). `drawPlatformConnector()`
+>   now looks up `trunkTreeImgs[p.connectorVariant]` directly.
+>   `isWindowTreePlatform()`'s comment updated to point at
+>   `trunkTreeImgs`/Copy 3 instead of the old grid; its actual logic
+>   (`p.connectorVariant !== 2`) was untouched since indexing is unchanged.
+> - **Verified live via Playwright**, not just `node --check`: loaded 1-4
+>   ("The Tangled Deep", the level with the closest-packed trunk trees) with
+>   `?debug=1` — window-tree (Copy 3) and birch (Copy 6) sit
+>   right next to each other on the same platform and render with clean
+>   edges, no ghosting/slivers from one tree into the other. The numbers
+>   Jonathan burned into each Copy file for verification are still visible
+>   in this screenshot on purpose — **he's removing them from the image
+>   files next**, not a bug.
+> - `node --check` clean. Build bumped to `2026-07-20.19`
+>   (`index.html` `game.js?v=` → 46), `dist/game.js` rebuilt via
+>   `npm run build` (183558 bytes). **Not yet uploaded** — Jonathan still
+>   needs to (1) remove the burned-in numbers from the 6
+>   `trees-to_render-big-and-tall-sprites - Copy <n>.png` files, then (2)
+>   FileZilla-upload `dist/game.js` (renamed) + `index.html` +
+>   the 6 Copy PNGs (new files, not currently on the server at all).
+> - **Same technique still needed for `full-trees-sprites.png`** (the
+>   similar-but-unused decorative sheet Jonathan also cropped into 6 numbered
+>   files earlier this session) — those aren't wired into anything yet since
+>   that sheet was never used by the game to begin with; revisit if/when
+>   there's an actual use for it (background decoration was floated as an
+>   idea, not committed to).
+
+> **2026-07-20 (newest session): World 1 music stops looping after extended
+> play — root-caused, not yet fixed.**
+> - Jonathan reported the World 1 track eventually goes silent after playing
+>   for a while (not immediately, not on a level change — mid-session).
+>   Confirmed this is caused by today's earlier "reuse Audio elements instead
+>   of `new Audio(src)` per play" change (see the `2026-07-20 (latest, new
+>   session): music startup fixed...` entry below) — that change fixed slow
+>   startup but introduced a new long-lived-element risk.
+> - **Mechanism:** `getMusicAudio()` (game.js:734-748) sets `el.loop = true`
+>   exactly once when a track's `Audio` element is first created, then
+>   `switchMusic()`/`playLevelMusic()` reuse that same cached element for the
+>   rest of the session (`musicCache` Map, src -> element). There is no
+>   manual/`ended`-based loop scheduler anywhere in the file — playback relies
+>   entirely on the browser's native loop-restart, and nothing ever checks
+>   that it's still actually happening (no `pause`/`stalled`/`ended`
+>   watchdog). The only recovery path that exists, `armMusicUnlock()`
+>   (game.js:797-809), is exclusively for the *first* autoplay-block case
+>   (`NotAllowedError` before any user gesture) — it does nothing once music
+>   has already started playing once.
+> - The `error` listener on the element (game.js:742-744) only
+>   `console.warn`s — it doesn't reload, doesn't fail over to the `.ogg`
+>   sibling already sitting next to every mp3 in `assets/Music/`, and doesn't
+>   clear the `musicCache` entry, so a broken element stays broken/cached for
+>   the rest of the page's life.
+> - **Leading hypothesis:** a long-lived native `<audio loop>` element
+>   occasionally fails to seek back to 0 and restart after many loop
+>   iterations (a known class of long-session Chromium/WebKit audio-decoder
+>   issue) or hits a transient media error mid-loop — either way, once it
+>   silently stops, nothing in the code will ever call `.play()` on it again
+>   until the player triggers an actual track change (next level, settings
+>   toggle, victory), which matches "plays fine for a while, then just goes
+>   quiet."
+> - **Not yet applied — fix agreed but not written this session:** add a
+>   lightweight watchdog (inside the existing `requestAnimationFrame` loop,
+>   `loop()` at game.js:5054) that notices `state === "playing" &&
+>   currentMusic.paused` when it shouldn't be and calls `.play()` again: also
+>   make the `error` handler clear the `musicCache` entry (so a future
+>   `getMusicAudio()` call rebuilds a fresh element) rather than just logging.
+>   Same underlying mechanism applies to every world/realm, not just World 1
+>   — it's just the one Jonathan happened to hit first from playtime.
+> - **Do this next:** implement the watchdog + error-recovery fix above in
+>   `game.js`, bump `BUILD_VERSION`/`?v=` cache-busters, `npm run build` to
+>   refresh `dist/game.js`, then Jonathan needs to actually FileZilla-upload
+>   `dist/game.js` (renamed) + `index.html` for it to go live — same
+>   reminder as every deploy note in this file.
+
+> **2026-07-20 (still later, same new session): floating-tree roots fixed
+> level-wide, verified by a static pass over every forest level's platform
+> data, not just fixing the one screenshot.**
+> - Jonathan's screenshot showed a tree whose base visibly hung out past its
+>   platform's edge into open air. Root cause: `drawPlatformConnector()`'s
+>   trunk branch guarantees a tree's rendered width is AT LEAST `p.w * 1.3`
+>   (added 2026-07-20 earlier this doc, to stop narrow variants like the
+>   birch looking "balanced on a twig") — that's a single uniform scale
+>   applied to the WHOLE pre-composed tree image, so widening it to satisfy
+>   that floor also widens the ROOT portion at the base by the same factor,
+>   with nothing stopping that root from extending past the platform's own
+>   footprint into an adjacent gap that has nothing in it. The existing
+>   `GATE_HALF_W` logic already did something similar for the two level-exit
+>   gates specifically; this just wasn't extended to ordinary
+>   platform-to-platform gaps.
+> - Wrote a one-off Node script
+>   (`analyze_trees.js` in the session's scratchpad, not committed) that
+>   parses every forest level's `platforms` array straight out of `game.js`,
+>   replicates the exact deterministic seeding formula
+>   (`connectorStyle`/`connectorVariant`), and for every trunk-connector
+>   platform computes whether its guaranteed minimum root width exceeds the
+>   real gap to its nearest neighbouring platform. First pass found FOUR
+>   real, reproducible instances across 1-2 and 1-4 (not a one-off — this
+>   was a systemic gap in the width-floor logic, confirmed BEFORE writing
+>   any fix).
+> - Fix: `drawPlatformConnector()` now also computes the actual left/right
+>   gap to the nearest neighbouring platform (excluding bridges/sinking
+>   platforms) and clamps `maxW` so the root can never claim more than that
+>   gap allows (`ROOT_MARGIN = 20px` kept as visible empty air even when
+>   otherwise unconstrained, so a root doesn't reach the pixel-exact gap
+>   edge either) — same reasoning as the existing gate clamp, just
+>   generalized to platform neighbours too. Re-ran the same analysis script
+>   against the new logic: all four previously-flagged instances resolved
+>   (e.g. the worst case, 1-4's platform at x=1710, went from a 23px
+>   guaranteed overhang on a gap with 0px of room, to 0px overhang exactly
+>   matching its platform width) — zero floating instances remain in any of
+>   the 5 forest levels.
+> - **Also cross-checked live, not just offline**: the same script's
+>   window-tree counts per level matched the running game's own `?debug=1`
+>   overlay exactly (1-1: 1, 1-4: 2) — good independent confirmation the
+>   static analysis reflects real runtime behavior, not just the source
+>   text. A live screenshot of the specific worst-case platform (x=1710 in
+>   1-4, deep in a long enemy gauntlet level) wasn't obtained — reaching it
+>   needs real combat/platforming that blind-scripted Playwright input keeps
+>   proving unreliable for this session (third time it's derailed a test;
+>   noted again for whoever picks this up next). **Worth a quick look next
+>   time you're at that spot in 1-4 to visually confirm**, though the
+>   math and the live-overlay cross-check both say it should be resolved.
+> - World 2 (dunes) unaffected — its platforms don't use this trunk sprite
+>   sheet at all (procedural connector only), so there's nothing there to
+>   float in the first place.
+> - `node --check` clean. `BUILD_VERSION` → `2026-07-20.18`, `index.html`'s
+>   `game.js?v=` → 45, `dist/game.js` rebuilt via `npm run build` (232819 →
+>   184188 bytes). **Still needs Jonathan's FileZilla upload — `dist/game.js`
+>   AND `index.html` together**, same reminder as every entry above.
+
+> **2026-07-20 (yet later, same new session): the "no dialogue popup" report
+> traced to trying to talk to a PLATFORM tree, not the level's real one —
+> fixed by making platform trees with an actual window talkable too, plus a
+> `?debug=1` diagnostic overlay.**
+> - Jonathan's screenshot + a shared debug overlay (see below) showed the
+>   real cause immediately: he was standing at `x=1176` in 1-1, but that
+>   level's only wired-up tree (`exitPoint`) is at `x=2260` — 1041px away,
+>   off past the far end of the level. He was at a decorative PLATFORM
+>   connector tree (one gets drawn under most elevated platforms, randomly
+>   chosen from a 6-variant sprite sheet) — visually near-identical to the
+>   real exit tree, but not wired to `tryTalkToTree()` at all. Confirmed by
+>   opening `assets/forest/trees/trees-to_render-big-and-tall-sprites.png`
+>   directly: only ONE of the 6 trunk variants (index 2, top-right — a
+>   twisted tree with hanging lanterns and a round glowing window) is
+>   actually painted with a window; the other 5 (plain oak, tall oak, pine,
+>   mossy/mushroom oak, birch) have none.
+> - Jonathan's call once he saw that: make every tree that's actually drawn
+>   with that window variant talkable too, not just the one at the level's
+>   end. New `isWindowTreePlatform(p)` (mirrors `drawPlatformConnector()`'s
+>   own render gate exactly: `themeName==="forest" && connectorStyle==="trunk"
+>   && connectorVariant===2`, not a bridge/sink/ground-level platform) — 
+>   `tryTalkToTree()` now scans `platforms` for one in range after the
+>   exitPoint/backExitPoint checks miss. All window trees in a level (there's
+>   usually 0-2 per level, seeded deterministically same as the art itself)
+>   share that level's own `treeVoice` pool — same wood, same voice,
+>   whichever hollow Troll happens to be standing at. `sayTreeLine()` and
+>   `debugTalk()` factored out so both the exit-tree path and the new
+>   platform-tree path share one implementation instead of duplicating it.
+>   World 2 unaffected — its dunes platforms use the procedural connector,
+>   never this sprite sheet, so it has no extra window trees beyond its two
+>   existing exit/entry ones.
+> - **New: `?debug=1` diagnostic mode** (`DEBUG` const, inert unless the
+>   query param is set) — small on-screen readout: Troll's live x/y, exact
+>   distance to `exitPoint`/`backExitPoint`, count and distance to the
+>   nearest in-level window-tree platform, and the last Enter/interact
+>   attempt with its full outcome (what it found, or exactly why not).
+>   Meant to stay in the file permanently as a reusable diagnostic, not a
+>   one-off — safe since it does nothing without the param.
+> - **Confirmed live via Playwright**, including landing on the EXACT
+>   platform from Jonathan's screenshot (x=1150 in 1-1): walked there,
+>   pressed Enter, overlay logged `window trees in level: 1, nearest at
+>   x=1245 dx=132 IN RANGE` then `talked to a platform window-tree at
+>   x=1150 (1-1 Into the Wood, tier=levelDone): "The edge of the wood is
+>   quiet again..."` — full round trip confirmed, including correct tier
+>   selection (he'd already found 1-1's artifact, so `levelDone` not
+>   `inProgress`, exactly as expected).
+> - Also worth recording since it burned real time this session: local
+>   Playwright testing hit TWO separate false leads before landing on the
+>   real fix — (1) a background/inactive browser tab throttles
+>   `requestAnimationFrame` hard enough that held-key movement barely
+>   progresses in wall-clock time (fixed by calling `page.bringToFront()`
+>   before any input sequence); (2) Python's single-threaded dev server
+>   dropped the `game.js` request outright under load (`ERR_CONNECTION_RESET`)
+>   on one navigation, silently leaving the OLD script running with no error
+>   surfaced to the page — always check the console for a failed `game.js`
+>   load before trusting a "nothing changed" result while testing locally.
+> - `node --check` clean. `BUILD_VERSION` → `2026-07-20.17`, `index.html`'s
+>   `game.js?v=` → 44, `dist/game.js` rebuilt via `npm run build` (231338 →
+>   182789 bytes). **Still needs Jonathan's FileZilla upload — `dist/game.js`
+>   AND `index.html` together**, same reminder as every entry above.
+
+> **2026-07-20 (even later, same new session): every window-tree now has its
+> own unique dialogue, and confirmed the talk-to-tree feature itself was
+> never broken.**
+> - Jonathan reported pressing Enter at 1-1's window tree and getting no
+>   popup. Traced the actual mechanism (`interact()` → `tryTalkToTree()`,
+>   `TREE_TALK_RANGE_X/Y`, `exitPoint`/`backExitPoint`) and it's sound — live
+>   Playwright test (see below) confirms the popup fires correctly. Most
+>   likely explanation: the earlier `BUILD_VERSION 2026-07-20.14` deploy
+>   genuinely wasn't live yet at the moment he tried it (confirmed separately
+>   in this session's own chat — he'd only just asked "what should the build
+>   number be" and it turned out `index.html`'s own `?v=` bump hadn't been
+>   uploaded alongside `dist/game.js`, which is exactly the kind of gap that
+>   silently serves a stale cached build with no visible sign of it — the
+>   same failure mode noted in this file's very first bug-history comment
+>   from 2026-07-18). Nothing needed fixing in `tryTalkToTree()` itself.
+> - **What DID change, per Jonathan's follow-up ask**: "all trees with
+>   little windows in all worlds needs a conversation... unique set of
+>   possible things to say to troll, based on how far Troll has progressed."
+>   Previously all window trees (both `exitPoint` and `backExitPoint`, drawn
+>   via `drawTreeExit`) shared one single generic 3-tier line pool
+>   (`TREE_LINES_IN_PROGRESS/LEVEL_DONE/WORLD_DONE`) regardless of which
+>   level's tree Troll was actually standing at. Every one of the 8 current
+>   non-boss levels (1-1..1-4, 2-1..2-4 — boss levels get a portal instead,
+>   never a tree) now has its own `treeVoice: { inProgress, levelDone,
+>   worldDone }` field with 2 unique lines per tier, written to that level's
+>   own name/place (1-1's tree talks about the treeline, 1-3's about being
+>   the oldest tree in the Old Grove, etc.) and its position in the story —
+>   World 2's trees are written drier and warier per GAME_BIBLE §9's canon
+>   that they're literally "bleached bones of portal trees," not living wood
+>   like World 1's, and 2-1's tree explicitly echoes Angus's just-delivered
+>   "they're PATIENTS!" beat. `tryTalkToTree()` now checks
+>   `treeLvl.treeVoice` first and only falls back to the old generic pools
+>   if a level doesn't define one (kept specifically so a future World 3+
+>   level added without custom tree dialogue still says something sensible).
+> - **Playwright-verified live**, and worth noting HOW: the first live check
+>   (via `?level=1-2`, talking to 1-1's tree from 1-2's spawn) showed the
+>   OLD generic line despite the code being correct — the browser tab had
+>   cached `index.html` itself (not just `game.js`) from an earlier
+>   navigation this same session and kept requesting the stale `game.js?v=`
+>   it already had, even after the file changed on disk. Re-verified after
+>   bumping to `?v=42`/`BUILD_VERSION 2026-07-20.15` AND forcing a real
+>   cache-bypass navigation (an extra dummy query param) — confirmed correct
+>   at both 1-1's tree (via 1-2's spawn: "You're barely past the treeline...")
+>   and 2-1's tree (via 2-2's spawn: "This sand used to be soil..."). A
+>   good reminder that even local Playwright testing isn't automatically
+>   immune to the same stale-cache trap as a real deploy.
+> - `node --check` clean. `BUILD_VERSION` → `2026-07-20.15`, `index.html`'s
+>   `game.js?v=` → 42, `dist/game.js` rebuilt via `npm run build` (225397 →
+>   178409 bytes). **Still needs Jonathan's FileZilla upload — both
+>   `dist/game.js` AND `index.html` together**, per the cache-bump lesson
+>   above.
+
+> **2026-07-20 (latest, new session): music startup fixed, tree/ruin sprite
+> bleed fixed for real, and the World-1 boss's translation-spell sequence
+> rebuilt to match Jonathan's spec.**
+> - **Music: reused Audio elements instead of a fresh `new Audio(src)` on
+>   every play\*Music() call.** All three (`playLevelMusic`/`playMenuMusic`/
+>   `playVictoryMusic`) now go through one shared `switchMusic()` +
+>   `getMusicAudio()` (a `src -> HTMLAudioElement` cache), so replaying a
+>   track (menu → level → back to menu, a retry) resumes an already-buffered
+>   element instead of re-fetching. `preloadAllMusic()` now warms the SAME
+>   cached elements (previously a disposable throwaway `Audio`, wasted once
+>   real playback started) and, critically, warms the **menu theme and
+>   World 1's own track first and immediately**, staggering the other
+>   4 worlds' tracks afterward — those two are the only ones a new player
+>   can hear in their first minute, so they were previously competing for
+>   bandwidth against Worlds 2-5's tracks (2.7-4.7MB each) plus every sprite
+>   the page also loads at boot. New `.htaccess` at the candy-dash root adds
+>   1-year `Cache-Control`/`Expires` for `mp3/png/jpg/webp/woff2` (not
+>   `game.js`/`index.html`/`style.css`, which the existing `?v=` cache-buster
+>   needs to keep refetching) — the actual "cache it for next time" half of
+>   the ask, so a *returning* visit doesn't redownload music/art at all.
+>   **What this does NOT fix**: browser autoplay policy. Confirmed live via
+>   Playwright — a fresh page load still gets `NotAllowedError` on both the
+>   menu theme and World 1's track until the very first click/keypress
+>   anywhere (`armMusicUnlock()`, pre-existing), which is a hard browser
+>   restriction, not a bug in this game. If Jonathan's own testing genuinely
+>   never gets to hear menu music at all (not even after clicking Play),
+>   that'd point at something else — worth a second look with the browser's
+>   own autoplay-policy indicator open.
+> - **Tree/ruin sprite bleed (still visible after the 2026-07-20
+>   source-rect-cropping fix earlier this doc)**: `drawSpriteCell()` cropped
+>   the *source rect* to each cell's measured content box, but a source rect
+>   that size still lets the canvas's own downscale/smoothing filter sample
+>   a texel or two just past that rect — bleeding in a sliver of whatever's
+>   painted next to it in the shared sheet (the next tree over). Fixed by
+>   pre-slicing each cell out to its OWN small offscreen canvas once (cached
+>   per source image in a new `spriteCellCache` `WeakMap`), and always
+>   drawing/scaling FROM that isolated canvas — there's nothing adjacent
+>   left for any filter to sample. `node --check` clean; visually confirmed
+>   via Playwright at 1-4 (screenshot showed no bleed), but the *specific*
+>   instance Jonathan flagged wasn't identified by level/spot, so **worth a
+>   look at whichever tree looked wrong** to confirm this was it.
+> - **World-1 boss translation-spell sequence rebuilt to spec** (Jonathan:
+>   boss was sitting up into the "dejected" pose too fast, right as the
+>   gibberish started, when he should stay lying down through it):
+>   - `drawEnemy()` now only swaps to the dejected/sit-up sprite once
+>     `dialoguePhase === "translated"` — through "falling", "garbled", and
+>     "spell" he stays on the defeated/lying sprite.
+>   - New Troll line, said the instant the gibberish starts (`startBossDialogue()`):
+>     `TROLL_TRANSLATION_SPELL_LINE` = "Looks like we need a translation
+>     spell." — reuses the existing global dialogue-bubble system, so it
+>     appears over Troll same as any other line.
+>   - The green translation-spell glow moved from the boss to **Troll**
+>     (he's casting it) — `player.spellGlowT`, rendered in `drawTroll()`,
+>     driven by the boss's `dialoguePhase` tick in `update()`. Duration
+>     (`BOSS_DIALOGUE_SPELL_DURATION`) changed from 0.9s to the requested
+>     **4 seconds**. Sparkles (`spawnSpellSparkles`, renamed from
+>     `spawnBossSpellSparkles`) now spawn at Troll's position too. Comment
+>     left in `drawTroll()` noting this glow is a placeholder for the
+>     arm-wave animation Jonathan said he'll provide later.
+>   - The boss's own bubble now glows green briefly as it swaps from
+>     gibberish to the real redeemed line (`drawBubble()` gained an optional
+>     `glow` param, a canvas shadow-blur fade; `BOSS_TRANSLATED_GLOW_FADE`).
+>   - **Dejected-pose levitation bug fixed**: the universal idle
+>     breathing-bob every enemy gets in `drawEnemy()` was still being
+>     applied to the boss's sit-up pose, reading as gentle floating. Now
+>     zeroed specifically when `o.isBoss && o.defeatPhase === "dejected"` —
+>     he's anchored flush to `GROUND_Y` with no bob.
+>   - `node --check` clean; level 1-4 render-verified via Playwright
+>     (screenshot, no new console errors beyond the pre-existing
+>     `rune-eihwaz.png` 404). **Not live-verified end-to-end** — reaching
+>     and defeating the actual boss needs real platforming/combat that
+>     blind-scripted Playwright input isn't reliable for (same limitation
+>     noted in the sink-platform-flicker entry below); Troll died to a
+>     regular enemy en route during this session's attempt. **Please play
+>     through the World-1 boss fight live next session** to confirm the
+>     full sequence (stays down → gibberish → Troll's line → 4s green glow
+>     on Troll → bubble glows green → English line → boss sits up anchored,
+>     no bob) reads right end to end.
+> - `BUILD_VERSION` → `2026-07-20.14`, `index.html`'s `game.js?v=` → 41,
+>   `dist/game.js` rebuilt via `npm run build` (217360 → 170214 bytes).
+>   **Still needs Jonathan's FileZilla upload** (including the new
+>   `.htaccess`) — nothing in this entry is live.
+
+> **2026-07-20 (later still): touch controls reworked — crouch folded into
+> the move track, formal ⏎ interact button; menu how-to text made readable
+> over the background art.** (build 2026-07-20.13, dist rebuilt)
+> Jonathan's live-play feedback with screenshots:
+> - **Crouch is now a pull-down on the left-thumb slide track**: drag the
+>   thumb down ~20px from wherever it first touched (`CROUCH_PULL_PX` in
+>   `game.js`) to crouch, ease back up to stand. Threshold is relative to
+>   the initial touch, NOT the track's bottom edge — the track sits 16px
+>   from the screen edge, so an absolute zone would be unreachable. Knob
+>   now shows a small ▼ under the ◀ ▶ that lights up (`#move-track.crouching`)
+>   while crouched. The separate `#crouch-btn` was removed.
+> - **`#talk-btn` (💬) became `#action-btn` (⏎)** — the formal touch
+>   equivalent of the Enter key. Both keyboard Enter and the button route
+>   through a new shared `interact()` (just above `tryTalkToTree()` in
+>   `game.js`); that function is THE hook for future levers/switches/NPCs —
+>   wire new interactions there and both inputs get them for free.
+> - **Menu how-to text**: the background art was washing out the muted grey
+>   `.howto` paragraph; it's now `--ink` on a translucent white rounded
+>   panel (`rgba(255,255,255,0.68)`, 14px radius). Verified via local
+>   http-server + Playwright screenshot.
+> - **Pre-existing, not fixed**: `assets/rune-eihwaz.png` 404s locally —
+>   no `rune-*.png` exists anywhere under `assets/`. May be present only on
+>   the live server; worth checking on trollandunicorn.com.
+>
+> **2026-07-20 (yet later, same day): narrow tree variants thickened, wide
+> ones reined in so neighbours stop overlapping, music on/off setting added.**
+> Jonathan's second round of live feedback, with 3 screenshots: a birch
+> variant looked "silly" with a platform balanced on a visibly thin trunk;
+> a second showed part of a neighbouring platform's tree bleeding into frame
+> next to the one in focus (the `maxW` from the previous entry, p.w*3.2, let
+> trees on tightly-spaced platforms grow wide enough to visually collide);
+> and he asked for a Settings toggle to mute music independently of SFX.
+> - `drawSpriteCell()` gained a `minW` param — width now independently
+>   clamps into `[minW, maxW]` while height (`dh`) is always honoured
+>   exactly regardless (see the updated function comment in `game.js`).
+>   Trunk connector call now passes `minW = p.w * 1.3` (thickens narrow
+>   variants like the birch without puffing up ones that were already fine)
+>   and `maxW` pulled back from `p.w * 3.2` to `p.w * 2.3` (less bleed into
+>   neighbours). Logic-verified (`node --check` clean, the math is a
+>   straightforward independent-axis clamp) but **not yet spot-checked live
+>   on the specific birch instance** — died twice on live enemies en route
+>   to it (`1-2 Deeper Roots`, the platform at `x:1650,y:TIER1_Y`, connector
+>   variant index 5) before calling it. Worth a quick look there specifically
+>   next time you're testing.
+> - **New: Music on/off setting**, independent of the existing "Sound
+>   effects" toggle (which now only gates `beep()` SFX). New `settings.music`
+>   field (defaults `true`, persisted same as the rest of `settings` via
+>   `localStorage`), new `#set-music` checkbox in `index.html`'s settings
+>   panel, `applyMusicVolume()` now gates on `settings.music` instead of
+>   `settings.sound`.
+> - **Open question, not yet resolved**: Jonathan also reported "can't jump
+>   onto the ruin platform" and "the one above it is also not [high/reachable]
+>   enough" on one screenshot (a ruin with an ornate carved-medallion base,
+>   variant idx1 or idx3 in `ruins-sprites.png`, Troll standing at its foot,
+>   a second platform floating disconnected higher up in frame). Reviewed
+>   every platform pair in all 5 forest levels (`1-1` through `1-5`) by hand
+>   — every gap is within normal single-jump range (max ~165px used anywhere,
+>   vs. ~184px of single-jump height alone, before double-jump), so this
+>   doesn't look like a level-data reachability bug, and ruin *height*
+>   specifically wasn't touched by anything this session (no `TREE_HEIGHT_
+>   BOOST`-equivalent was ever applied to ruins — they still map 1:1 to
+>   `spanH`, same as the anchoring-fix entry below, just correctly anchored
+>   now instead of falling short). Best guess: the floating platform in that
+>   screenshot belongs to a different, later platform entry and isn't meant
+>   to read as connected to this ruin at all — but I couldn't confirm without
+>   knowing which level/spot this was. **Ask Jonathan which level** (or get
+>   an updated screenshot with the level name visible in the HUD) before
+>   spending more time on it.
+> - `BUILD_VERSION` → `2026-07-20.5`, cache-buster → `v=33`, `dist/game.js`
+>   rebuilt again (190877 → 157409 bytes).
+
+> **2026-07-20 (even later, same day): trees now scaled taller than their
+> platform's own span so the platform reads as embedded in the branches.**
+> Jonathan's follow-up feedback on the anchoring fix below, with a reference
+> screenshot: a tree scaled to end exactly at the platform line looks like
+> it's standing under a shelf, not holding it. New `TREE_HEIGHT_BOOST = 1.5`
+> constant in `game.js` — the trunk connector's draw height is now
+> `spanH * TREE_HEIGHT_BOOST` instead of bare `spanH` (bottom anchor
+> unchanged, still flush on `GROUND_Y`), and its width cap raised to
+> `p.w * 3.2` so the aspect-preserving `min(scaleH, scaleW)` in
+> `drawSpriteCell()` doesn't fight the height boost. Net effect: canopy now
+> rises past the platform's top edge and wraps around it, so `branch.png`'s
+> walkable surface (still drawn right after, still occluding whatever's
+> behind it) reads as sitting inside the foliage rather than on top of a
+> tree that happens to stop right there. Confirmed via Playwright at level
+> 1-1 — Jonathan reviewed the exact screenshot mid-session and confirmed
+> "this one looks ok." Ruins unaffected (pillars are meant to have a flat
+> top the platform rests ON, not to be grown around).
+> - `BUILD_VERSION` → `2026-07-20.4`, cache-buster → `v=32`, `dist/game.js`
+>   rebuilt again (189891 → 156371 bytes).
+
+> **2026-07-20 (later, same day): tree/ruin connector alignment fixed for
+> real, taller pre-composed trees swapped in, menu theme music added.**
+> - **Root cause of the misalignment Jonathan caught live** (tree canopy
+>   floating above/off-center from its trunk, ruin caps not sitting flush,
+>   trunks not reaching the ground): the very first version of
+>   `drawSpriteCell()` (see the entry below) anchored using each sprite
+>   sheet cell's raw *transparent-padded* edges, not the actual painted
+>   pixels — and every cell has a different amount of padding on every side.
+>   Measured the real content bounding box of every cell in both sheets via
+>   a one-off PIL script (`Image.crop(cellBox).getbbox()`) and rewrote
+>   `drawSpriteCell()` to anchor on that measured box instead: true visual
+>   bottom lands exactly on `bottomY` (the ground line), true visual
+>   horizontal center lands exactly on `cx` (the platform's center), and
+>   scale is now uniform on both axes (never distorts aspect, unlike the
+>   original which could squash width independently when `maxW` capped it).
+>   `TRUNK_CONTENT_BOXES`/`RUIN_CONTENT_BOXES` in `game.js` hold the measured
+>   values — re-measure and update them if either PNG is ever replaced.
+> - **Trunk connector is now one whole pre-composed tree**, not a
+>   trunk-sprite + separately-composited tree-top-sprite (that two-piece
+>   approach was the design that made the padding problem so visible in the
+>   first place — two independently-anchored pieces drift apart both ways
+>   even with correct math, since they're not a single coherent painting).
+>   Jonathan supplied `assets/forest/trees/trees-to_render-big-and-tall-
+>   sprites.png` (3×2 grid, whole trees with trunk+canopy+roots already
+>   combined, noticeably bigger/taller source paintings than the old
+>   trunk-sprites.png) specifically to replace the split approach — used
+>   as-is, no per-tree recropping needed since content-bbox anchoring
+>   handles the alignment regardless of how much padding each cell has.
+>   `trunk-sprites.png` and `tree-tops-sprites.png` are no longer referenced
+>   (left on disk, harmless); `treeTopVariant` removed from the per-platform
+>   seeding since there's no separate canopy piece to pick anymore.
+> - **The "floating pickups with no platform" report was almost certainly a
+>   framing/perception side-effect of the above, not a separate bug** —
+>   traced the actual heart+candy pair in level 1-1 (`hearts: [{x:1150,
+>   y:TIER1_Y-160}]`) via Playwright and found its supporting tree platform
+>   sitting exactly where the level data says it should, just at the very
+>   edge of/just past the screenshot's camera framing — easy to read as
+>   "nothing under it" when the tree itself was ALSO rendering badly
+>   misaligned at the time. Now that the tree anchors correctly, this should
+>   read fine, but **please double check live** — hearts/candies themselves
+>   are a completely separate, unmodified rendering path, so if it still
+>   looks wrong after this it's a different issue than the one just fixed.
+> - **New: menu theme music.** `assets/Music/Menu/Intro_Theme.mp3` (copied
+>   from `02_Art_and_Audio/Audio/Troll & Unicorn Cartoon intro music.mp3`),
+>   new `playMenuMusic()` in `game.js`, called once right after the
+>   boot-time `loadLevel(0)` (which itself starts World 1's own track behind
+>   the title screen as a side effect of just rendering the background level
+>   — `playMenuMusic()` immediately swaps that for the real intro theme).
+>   Pressing Play naturally replaces it via the existing `loadLevel()` →
+>   `playLevelMusic()` path, same as any other level transition — no new
+>   state-tracking needed.
+> - `BUILD_VERSION` bumped to `2026-07-20.3`, cache-buster to `v=31`,
+>   `dist/game.js` rebuilt (189107 → 156971 bytes). Local PHP dev server left
+>   running at `http://localhost:8123/index.html` for Jonathan to test
+>   directly. **Still needs the usual FileZilla upload** once confirmed good
+>   — nothing in this entry is live.
+
 > **2026-07-20: real tree/ruin platform art wired in, spitter enemy no longer
 > fires from off-screen-adjacent range.**
 > - **New forest platform-connector art** — Jonathan supplied

@@ -17,7 +17,7 @@
   <meta name="twitter:image" content="https://trollandunicorn.com/Games/candydash/assets/splash_full.png" />
   <!-- ?v= is a cache-buster: bump it whenever this file or the css/js change
        so phones pick up the new version without a manual cache clear. -->
-  <link rel="stylesheet" href="style.css?v=15" />
+  <link rel="stylesheet" href="style.css?v=17" />
 </head>
 <body>
   <div id="game-wrap">
@@ -33,7 +33,7 @@
       <p class="howto">
         <b>Space</b> or ⤒ to jump — press again mid-air to double jump if you have 2+ candy
         charged. <b>Arrow keys</b>, or slide your thumb on the ◀ ▶ track, to explore (nothing
-        auto-scrolls); hold <b>Down</b>/S or ▼ to crouch and aim low. Collect Matrix-energy candies to charge Sparkles' horn (3 per shot,
+        auto-scrolls); hold <b>Down</b>/S, or pull your thumb down on the track, to crouch and aim low. <b>Enter</b> or ⏎ to talk, pull levers, and interact with whatever's in front of you. Collect Matrix-energy candies to charge Sparkles' horn (3 per shot,
         and it also trickles back slowly on its own — wait around if you run dry); press
         <b>X</b> or ✦ to fire a bolt and purify a corrupted creature back to its true form.
         Every level hides a piece of an ancient rune on a high platform — find it before
@@ -58,6 +58,7 @@
       <h2>Settings</h2>
       <div class="settings-body">
         <label class="setting-row"><span>Sound effects</span><input type="checkbox" id="set-sound" /></label>
+        <label class="setting-row"><span>Music</span><input type="checkbox" id="set-music" /></label>
         <label class="setting-row"><span>Volume</span><input type="range" id="set-volume" min="0.1" max="1" step="0.1" /></label>
         <label class="setting-row"><span>Swap control sides</span><input type="checkbox" id="set-swap" /></label>
         <label class="setting-row"><span>Button size</span><input type="range" id="set-size" min="46" max="80" step="2" /></label>
@@ -134,10 +135,10 @@
 
     <div id="touch-controls" class="hidden">
       <div class="ctrl-cluster">
-        <div id="move-track" aria-label="Move left/right">
-          <div id="move-knob">◀ ▶</div>
+        <div id="move-track" aria-label="Move left/right, pull down to crouch">
+          <div id="move-knob"><span>◀ ▶</span><span class="knob-down">▼</span></div>
         </div>
-        <button id="crouch-btn" class="ctrl-btn" aria-label="Crouch">▼</button>
+        <button id="action-btn" class="ctrl-btn ctrl-action" aria-label="Interact (Enter)">⏎</button>
       </div>
       <div class="ctrl-cluster">
         <button id="blast-btn" class="ctrl-btn ctrl-blast" aria-label="Horn blast">✦</button>
@@ -154,6 +155,6 @@
     </div>
   </div>
 
-  <script src="game.js?v=30"></script>
+  <script src="game.js?v=48"></script>
 </body>
 </html>

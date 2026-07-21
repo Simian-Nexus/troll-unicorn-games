@@ -8,6 +8,12 @@
   --brand: #dcc48f;
   --brand-dark: #9a7840;
   --brand-ink: #1d3560;
+  /* Watermark tuning: this is the SAME light-blue tint .screen always had
+     (0.94 = today's look, effectively opaque). Lower it to let more of the
+     logo watermark behind it show through — e.g. 0.85 for a faint hint,
+     0.6 for a much bolder one. The colour itself never changes, only how
+     solid it sits over the logo. */
+  --screen-tint-alpha: 0.7;
 }
 
 * { box-sizing: border-box; }
@@ -76,7 +82,24 @@ canvas {
   gap: 12px;
   text-align: center;
   padding: 24px;
-  background: rgba(216, 227, 248, 0.94);
+  /* Faint centered logo watermark, tinted by the same light-blue the screen
+     always had: a solid-colour gradient layered over the logo image acts as
+     an adjustable opacity control (plain multi-layer backgrounds can't set
+     per-layer opacity directly) — see --screen-tint-alpha above for tuning.
+     The opaque background-color underneath is load-bearing, not decorative:
+     without it, lowering the tint alpha doesn't just reveal more logo — it
+     lets the game canvas sitting behind .screen (which keeps its last-drawn
+     frame even while covered) bleed through everywhere outside the logo's
+     own bounds. background-color always paints below background-image, so
+     it guarantees a fully opaque light-blue base regardless of tint alpha. */
+  background-color: var(--bg);
+  background-image: linear-gradient(
+      rgba(216, 227, 248, var(--screen-tint-alpha)),
+      rgba(216, 227, 248, var(--screen-tint-alpha))
+    ), url("assets/logo.png?v=2");
+  background-size: cover, cover;
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
   overflow-y: auto;
 }
 
@@ -157,8 +180,13 @@ h2 {
   font-size: clamp(13px, 2.4vw, 16px);
 }
 
+/* Readable over the menu's background art: near-black ink on a translucent
+   light rounded panel instead of bare muted text, which the image washed out. */
 .howto {
-  color: var(--muted);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.68);
+  border-radius: 14px;
+  padding: 12px 16px;
   font-size: clamp(12px, 2vw, 14px);
   max-width: min(90vw, 420px);
   line-height: 1.5;
@@ -304,9 +332,22 @@ h2 {
   font-size: 13px;
   font-weight: 800;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  line-height: 1.05;
   pointer-events: none;
+}
+
+/* Pull-down-to-crouch hint under the ◀ ▶ in the knob; lights up while the
+   thumb is actually held below the track (see trackUpdate in game.js). */
+.knob-down {
+  font-size: 10px;
+  opacity: 0.45;
+}
+
+#move-track.crouching .knob-down {
+  opacity: 1;
 }
 
 #hud-settings {
@@ -524,6 +565,13 @@ h2 {
 /* Settings: swap which thumb gets movement vs actions. */
 #touch-controls.swapped {
   flex-direction: row-reverse;
+}
+
+/* The formal interact button — same meaning as the Enter key (talk to
+   trees now; levers and other logical actions later). */
+.ctrl-action {
+  font-size: 24px;
+  background: rgba(255, 255, 255, 0.4);
 }
 
 .ctrl-blast {
