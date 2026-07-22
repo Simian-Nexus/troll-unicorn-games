@@ -118,6 +118,32 @@ canvas {
   height: auto;
 }
 
+/* Shown while art is still fetching (see loadImg's assetsLoaded tracking in
+   game.js) so slow/cellular connections don't drop straight into gameplay
+   with placeholder graphics and canvas trails from unfinished background
+   layers — the Play button is only revealed once this hides. */
+.loading-label {
+  margin: 0;
+  color: var(--navy);
+  font-size: clamp(13px, 2.4vw, 16px);
+}
+
+#loading-bar-track {
+  width: min(80vw, 320px);
+  height: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 2px solid var(--shadow-navy);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+#loading-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--brand-dark);
+  transition: width 0.15s ease-out;
+}
+
 h1 {
   margin: 0;
   color: var(--navy);

@@ -5,7 +5,7 @@
   // critters not despawning" reports on 2026-07-18 (the game.js?v= number
   // hadn't been bumped despite the file changing). Rendered by the
   // #build-version element (see index.html/style.css) in every screen state.
-  const BUILD_VERSION = "2026-07-21.1";
+  const BUILD_VERSION = "2026-07-21.5";
   const buildVersionEl = document.getElementById("build-version");
   if (buildVersionEl) buildVersionEl.textContent = "build " + BUILD_VERSION;
 
@@ -110,6 +110,18 @@
   const ASSET_VERSION = 7;
   const av = (p) => p + "?av=" + ASSET_VERSION;
 
+  // Loading-screen gate (2026-07-21): on a slow/cellular connection, art was
+  // still arriving after Play was already clickable, so players saw blocky
+  // placeholder graphics mid-game instead of before it. Every image goes
+  // through loadImg() below, which counts itself here whether it succeeds or
+  // (after retries) permanently fails, so this always reaches 100% and the
+  // loading screen can't hang forever on one dropped request.
+  let assetsTotal = 0;
+  let assetsLoaded = 0;
+  const loadingScreen = document.getElementById("loading-screen");
+  const loadingBarFill = document.getElementById("loading-bar-fill");
+  const loadingLabel = document.getElementById("loading-label");
+
   // Temporary diagnostic mode (Jonathan, 2026-07-20: "track where I am and
   // when I click enter" — window-tree dialogue works locally but not on the
   // Bluehost deploy). ?debug=1 turns on an on-screen readout (position +
@@ -121,17 +133,13 @@
   const DEBUG = new URLSearchParams(location.search).get("debug") === "1";
   let debugLastInteract = null; // { t, text } — set by tryTalkToTree()
 
-  const idleSprite = new Image();
-  idleSprite.src = av("assets/troll/troll-idle.png");
-  const unicornSitImg = new Image();
-  unicornSitImg.src = av("assets/unicorn-sit.png");
+  const idleSprite = loadImg("assets/troll/troll-idle.png");
+  const unicornSitImg = loadImg("assets/unicorn-sit.png");
   // End-of-content beat on the true final finale (see enterFinale) — Sparkles
   // first admits the game isn't finished yet, then swaps to a cheerier pose
   // with the "come back later / join the leaderboard" line.
-  const unicornConfusedImg = new Image();
-  unicornConfusedImg.src = av("assets/unicorn-confused.png");
-  const unicornCandyCheerImg = new Image();
-  unicornCandyCheerImg.src = av("assets/unicorn-candy-cheer.png");
+  const unicornConfusedImg = loadImg("assets/unicorn-confused.png");
+  const unicornCandyCheerImg = loadImg("assets/unicorn-candy-cheer.png");
 
   const RUN_FRAME_PATHS = [
     "assets/troll/troll-run-1.png",
@@ -146,16 +154,10 @@
   const JUMP_FRAME_PATH = "assets/troll/troll-jump.png";
   const runFrameSlots = new Array(RUN_FRAME_PATHS.length).fill(null);
   RUN_FRAME_PATHS.forEach((p, i) => {
-    const img = new Image();
-    img.onload = () => (runFrameSlots[i] = img);
-    img.src = av(p);
+    loadImg(p, (img) => (runFrameSlots[i] = img));
   });
   let jumpFrame = null;
-  {
-    const img = new Image();
-    img.onload = () => (jumpFrame = img);
-    img.src = av(JUMP_FRAME_PATH);
-  }
+  loadImg(JUMP_FRAME_PATH, (img) => (jumpFrame = img));
 
   const CROUCH_FRAME_PATHS = [
     "assets/troll/troll-crouch-1.png",
@@ -167,9 +169,7 @@
   ];
   const crouchFrameSlots = new Array(CROUCH_FRAME_PATHS.length).fill(null);
   CROUCH_FRAME_PATHS.forEach((p, i) => {
-    const img = new Image();
-    img.onload = () => (crouchFrameSlots[i] = img);
-    img.src = av(p);
+    loadImg(p, (img) => (crouchFrameSlots[i] = img));
   });
 
   // Idle fidget: "look left" (16) -> "scratch bum" (7) -> a few frames of a
@@ -178,9 +178,7 @@
   const FIDGET_FRAME_COUNT = 29;
   const fidgetFrameSlots = new Array(FIDGET_FRAME_COUNT).fill(null);
   for (let i = 1; i <= FIDGET_FRAME_COUNT; i++) {
-    const img = new Image();
-    img.onload = () => (fidgetFrameSlots[i - 1] = img);
-    img.src = av(`assets/troll/troll-fidget-${i}.png`);
+    loadImg(`assets/troll/troll-fidget-${i}.png`, (img) => (fidgetFrameSlots[i - 1] = img));
   }
 
   // Enemy art hook: drop a transparent PNG at assets/enemies/<kind>.png
@@ -215,7 +213,18 @@
   function loadImg(src, onload) {
     src = av(src);
     const img = new Image();
-    if (onload) img.onload = () => onload(img);
+    assetsTotal += 1;
+    let settled = false;
+    const markSettled = () => {
+      if (settled) return;
+      settled = true;
+      assetsLoaded += 1;
+      updateLoadingProgress();
+    };
+    img.onload = () => {
+      if (onload) onload(img);
+      markSettled();
+    };
     // A busy or flaky connection (or dev server) can drop an image request;
     // retry a couple of times so a sprite doesn't stay missing all session.
     let attempts = 0;
@@ -227,11 +236,38 @@
         }, 500 * attempts);
       } else {
         img.permanentlyFailed = true; // callers can stop waiting for it
+        markSettled(); // count it so the loading screen doesn't hang forever
       }
     };
     img.src = src;
     return img;
   }
+
+  // Called on every asset settle (loaded or permanently failed). Updates the
+  // loading-screen progress bar and, once everything has settled, reveals
+  // the normal menu — see startup at the bottom of this file, which starts
+  // in "menu" state with the loading screen (not the menu) on top.
+  function updateLoadingProgress() {
+    if (!loadingScreen) return;
+    const pct = assetsTotal ? Math.round((assetsLoaded / assetsTotal) * 100) : 100;
+    if (loadingBarFill) loadingBarFill.style.width = pct + "%";
+    if (assetsLoaded >= assetsTotal) hideLoadingScreen();
+  }
+
+  let loadingScreenHidden = false;
+  function hideLoadingScreen() {
+    if (loadingScreenHidden || !loadingScreen) return;
+    loadingScreenHidden = true;
+    loadingScreen.classList.add("hidden");
+    if (state === "menu") overlay.classList.remove("hidden");
+  }
+  // Image loads have no built-in timeout — a request that neither fires
+  // onload nor onerror (just hangs on a bad connection) would leave the
+  // loading screen up forever. This is the escape hatch: let the player in
+  // after 20s regardless of what's still missing (they'll see placeholder
+  // art for whatever didn't make it, same as before this fix, rather than
+  // being stuck on a progress bar).
+  setTimeout(hideLoadingScreen, 20000);
   const forestLayers = [
     { img: loadImg("assets/forest/parallax/sky.png"), mult: 0.05 },
     { img: loadImg("assets/forest/parallax/far.png"), mult: 0.15 },
@@ -885,11 +921,11 @@
   const BOSS_TELEGRAPH = 0.6;
   const BOSS_FIRE_POSE_TIME = 0.45;
   const BOSS_BOLT_SPEED = 430;
-  // A boss blaster shot is scaled to Troll's CURRENT health, not a flat
-  // number: normally a brutal 3/4 of whatever he has left, but the energy
-  // shield (granted once the rune is assembled) tunes his ward down so it
-  // only costs 1/10 — see the bossBolt handling in the projectile-hit loop.
-  const BOSS_BOLT_DAMAGE_FRAC = 0.75;
+  // Without the energy shield (rune not assembled), a boss blaster shot is a
+  // near-kill: a flat 9/10 of Troll's MAX health (see BOSS_BOLT_DAMAGE_UNSHIELDED
+  // below, defined after PLAYER_MAX_HP). The shield (granted once the rune
+  // is assembled) instead scales to his CURRENT health at a mere 1/10 — see
+  // the bossBolt handling in the projectile-hit loop.
   const BOSS_BOLT_DAMAGE_FRAC_SHIELDED = 0.1;
   // Matrix energy also powers a mid-air second jump. Kept deliberately cheap
   // (much less than a candy's own 1/10 charge) so double-jumping to snag one
@@ -904,6 +940,11 @@
   // Health: touching an enemy costs health rather than the run. Damage
   // varies by enemy; a short invulnerability window follows each hit.
   const PLAYER_MAX_HP = 10;
+  // Jonathan, 2026-07-21: "reduce troll's life by 9 out of 10 if he doesn't
+  // get the puzzle formed" — a fixed amount off MAX hp, not whatever he
+  // currently has left (100 hp -> 10 left; 90 hp -> 0, fails). See
+  // BOSS_BOLT_DAMAGE_FRAC_SHIELDED above for the shielded case.
+  const BOSS_BOLT_DAMAGE_UNSHIELDED = Math.round(PLAYER_MAX_HP * 0.9);
   const TOUCH_DAMAGE = { drone: 2, grunt: 2, spitter: 2, brute: 3 };
   const BOSS_TOUCH_DAMAGE = 4;
   // Head-stomp redemption (2026-07-20, Jonathan): landing on top of a
@@ -999,9 +1040,14 @@
   const PUZZLE_CELL = 96; // px per tile on the 960x600 canvas
   const PUZZLE_GAP = 8;
   const PUZZLE_PIECES = 5; // artifacts needed before the puzzle opens
-  const PUZZLE_LINE = "Tap a piece next to the gap to slide it. Restore the rune!";
+  const PUZZLE_LINE =
+    "Tap a piece next to the gap to slide it. Restore the rune! (Enter/⏎ to give up)";
   const PUZZLE_TITLE = "The Rune of Resilience";
   const NEED_PIECES_LINE = "The pedestal hums... but I'm still missing rune pieces.";
+  // Quitting the puzzle (Enter/⏎, see quitPuzzle()) skips the shield but
+  // leaves the boss fight much deadlier — see BOSS_BOLT_DAMAGE_UNSHIELDED.
+  const PUZZLE_QUIT_FIRST_LINE = "Och that's too hard for me. I'll take my chances.";
+  const PUZZLE_QUIT_AGAIN_LINE = "Nope. Still too tricky.";
   const PIECES_VIEW_SECONDS = 6; // tap the HUD artifact icon to peek at pieces
 
   // Fall damage. The playfield is one screen tall; a drop of about 3/4 of a
@@ -1668,6 +1714,11 @@
     dialogueCooldown,
     dialogueQueue,
     dialogueSpeaker,
+    // World-space point the bubble's tail anchors to while a tree is
+    // speaking (set by sayTreeLine to whichever tree triggered it) — null
+    // means "follow Troll", used for every troll-speaker line including the
+    // follow-ups queued after a tree line. See drawDialogue().
+    dialogueAnchor,
     elapsed,
     score,
     crittersRedeemed,
@@ -1712,6 +1763,10 @@
   let finaleNextLevel = null; // set by enterFinale: continue here, or null = game complete
   let finaleEocTimer = null; // pending confused->cheer swap timeout, see enterFinale
   let puzzle = null; // active assembly minigame
+  // Tracks whether Troll has already bailed on THIS level's puzzle once —
+  // his second (and later) quit gets a different, more resigned line. Reset
+  // per level (loadLevel) since the puzzle itself is per-level.
+  let hasQuitPuzzleBefore = false;
   let piecesViewTimer = 0; // rune-pieces popup (tap the HUD artifact icon)
   let unicornEmerge = 0; // seconds since the boss fell — drives her slide-out
   const input = { left: false, right: false, down: false };
@@ -1727,8 +1782,11 @@
   // Speaker cues stay deliberately close to white: tree voices get a soft
   // leafy tint, while every Troll bubble gets a warm orange tint.
   const BUBBLE_FILL_DEFAULT = "rgba(255,255,255,0.95)";
-  const BUBBLE_FILL_TREE = "rgba(243,252,244,0.96)";
-  const BUBBLE_FILL_TROLL = "rgba(255,247,239,0.96)";
+  // Deliberately far apart in hue, not just tint, so the speaker is obvious
+  // at a glance (Jonathan, 2026-07-21: "much stronger colot difference" —
+  // the previous near-white green/peach pair was barely distinguishable).
+  const BUBBLE_FILL_TREE = "rgba(163,232,178,0.97)"; // tree/wood voice — green
+  const BUBBLE_FILL_TROLL = "rgba(255,196,120,0.97)"; // Troll's own lines — light orange
   const NEED_ARTIFACT_LINE = "I have to find the artifact thingy first.";
   // Flavor-only easter egg (2026-07-20, Jonathan): talking to the resident
   // of any hollow tree gate (Enter key / touch ⏎ action button), whether or not
@@ -2044,6 +2102,7 @@
     dialogueCooldown = 0;
     dialogueQueue = [];
     dialogueSpeaker = "troll";
+    dialogueAnchor = null;
     // Story cutscenes are per-level data now (lvl.intro) — played once per
     // run, so a retry of the same level doesn't replay it.
     if (lvl.intro && !introSeen[idx]) {
@@ -2053,6 +2112,7 @@
       intro = null;
     }
     puzzle = null;
+    hasQuitPuzzleBefore = false;
     unicornEmerge = 0;
     cameraX = 0;
     elapsed = 0;
@@ -2145,7 +2205,28 @@
   // one function and automatically works on both inputs.
   function interact() {
     if (state !== "playing") return;
+    if (puzzle) {
+      quitPuzzle();
+      return;
+    }
     tryTalkToTree();
+  }
+
+  // Bail on the sliding puzzle (Enter/⏎ — same button as talking to a tree,
+  // repurposed since it's otherwise unused while the puzzle is open). Not
+  // available during the solved celebration — by then there's nothing left
+  // to quit. See PUZZLE_QUIT_FIRST_LINE/PUZZLE_QUIT_AGAIN_LINE and
+  // BOSS_BOLT_DAMAGE_UNSHIELDED for the consequence of skipping it.
+  function quitPuzzle() {
+    if (!puzzle || puzzle.solvedFlash > 0) return;
+    puzzle = null;
+    dialogueMessage = hasQuitPuzzleBefore ? PUZZLE_QUIT_AGAIN_LINE : PUZZLE_QUIT_FIRST_LINE;
+    hasQuitPuzzleBefore = true;
+    dialogueTimer = DIALOGUE_DURATION;
+    dialogueDurationTotal = DIALOGUE_DURATION;
+    dialogueSpeaker = "troll";
+    dialogueAnchor = null;
+    beep(220, 0.15, "triangle", 0.04);
   }
 
   // Talk to a nearby hollow tree (Enter key / touch ⏎ action button) — purely
@@ -2179,7 +2260,7 @@
   // window-variant platform tree within it) — picks the line pool for
   // levelIdx's progress tier and shows it. sourceLabel is debug-only, so a
   // Bluehost-vs-local discrepancy shows which specific tree was hit.
-  function sayTreeLine(levelIdx, sourceLabel) {
+  function sayTreeLine(levelIdx, sourceLabel, anchor) {
     const treeLvl = LEVELS[levelIdx];
     const levelDone = artifactsTaken[levelIdx] || !treeLvl.artifact;
     const worldDone = realmBossDefeated[realmBossIndexFor(levelIdx)];
@@ -2199,6 +2280,7 @@
     dialogueTimer = TREE_DIALOGUE_DURATION;
     dialogueDurationTotal = TREE_DIALOGUE_DURATION;
     dialogueSpeaker = "tree";
+    dialogueAnchor = anchor || null;
     dialogueQueue = picked.followUp
       ? [{ text: picked.followUp, duration: TREE_DIALOGUE_DURATION, speaker: "troll" }]
       : [];
@@ -2232,12 +2314,18 @@
       pt &&
       Math.abs(player.x + player.w / 2 - pt.x) < TREE_TALK_RANGE_X &&
       Math.abs(player.y + player.h - pt.y) < TREE_TALK_RANGE_Y;
-    if (near(exitPoint)) return sayTreeLine(currentLevelIndex, "the level-exit tree");
-    if (near(backExitPoint)) return sayTreeLine(currentLevelIndex - 1, "the level-entry tree");
+    if (near(exitPoint)) return sayTreeLine(currentLevelIndex, "the level-exit tree", exitPoint);
+    if (near(backExitPoint))
+      return sayTreeLine(currentLevelIndex - 1, "the level-entry tree", backExitPoint);
     for (const p of platforms) {
       if (!isWindowTreePlatform(p)) continue;
-      if (near({ x: p.x + p.w / 2, y: GROUND_Y })) {
-        return sayTreeLine(currentLevelIndex, `a platform window-tree at x=${Math.round(p.x)}`);
+      const treePoint = { x: p.x + p.w / 2, y: GROUND_Y };
+      if (near(treePoint)) {
+        return sayTreeLine(
+          currentLevelIndex,
+          `a platform window-tree at x=${Math.round(p.x)}`,
+          treePoint
+        );
       }
     }
     const dExit = exitPoint ? Math.round(Math.abs(player.x + player.w / 2 - exitPoint.x)) : null;
@@ -2278,7 +2366,11 @@
       Math.abs(player.y + player.h - treePoint.y) < TREE_TALK_RANGE_Y;
     if (!nearTree) return;
     hasAutoTalkedFirstTree = true;
-    sayTreeLine(0, `the first platform window-tree at x=${Math.round(firstTree.x)} (automatic)`);
+    sayTreeLine(
+      0,
+      `the first platform window-tree at x=${Math.round(firstTree.x)} (automatic)`,
+      treePoint
+    );
   }
 
   // Kicks off once a boss settles ("falling" phase ends): he speaks in
@@ -3206,11 +3298,13 @@
         p.hit = true;
         let dmg = p.damage || SPIT_DAMAGE;
         if (p.bossBolt) {
-          // Scaled to Troll's CURRENT life, not a flat number: a brutal 3/4
-          // of what he has left, unless the shield rune tunes his ward down
-          // to a mere 1/10 (artifactsAssembled == the rune is fused).
-          const frac = artifactsAssembled ? BOSS_BOLT_DAMAGE_FRAC_SHIELDED : BOSS_BOLT_DAMAGE_FRAC;
-          dmg = Math.max(1, Math.round(player.hp * frac));
+          // Shielded (rune assembled): scales to Troll's CURRENT life, a mere
+          // 1/10 of what he has left. Unshielded: a fixed, punishing 9/10 of
+          // his MAX life regardless of what he has left going in — see
+          // BOSS_BOLT_DAMAGE_UNSHIELDED.
+          dmg = artifactsAssembled
+            ? Math.max(1, Math.round(player.hp * BOSS_BOLT_DAMAGE_FRAC_SHIELDED))
+            : BOSS_BOLT_DAMAGE_UNSHIELDED;
         }
         damagePlayer(dmg, p.x);
         if (state !== "playing") return;
@@ -3348,6 +3442,9 @@
         dialogueTimer = next.duration;
         dialogueDurationTotal = next.duration;
         dialogueSpeaker = next.speaker || "troll";
+        // Queued follow-ups are always Troll's own reply (see sayTreeLine) —
+        // his bubble tracks him as he moves, unlike the tree's fixed one.
+        dialogueAnchor = next.speaker === "tree" ? next.anchor || dialogueAnchor : null;
       }
     }
     if (dialogueCooldown > 0) dialogueCooldown -= dt;
@@ -4727,8 +4824,15 @@
 
   function drawDialogue() {
     const alpha = Math.min(1, dialogueTimer / 0.4, (dialogueDurationTotal - dialogueTimer) / 0.3 + 1);
-    const fillColor = dialogueSpeaker === "tree" ? BUBBLE_FILL_TREE : BUBBLE_FILL_TROLL;
-    drawBubble(player.x + player.w / 2, player.y - 24, dialogueMessage, 320, alpha, 0, fillColor);
+    const isTree = dialogueSpeaker === "tree";
+    const fillColor = isTree ? BUBBLE_FILL_TREE : BUBBLE_FILL_TROLL;
+    // A tree's voice comes from a fixed point in the world (the window it's
+    // speaking through) — the bubble must stay put there even as Troll
+    // wanders off, not trail after him like his own lines do (Jonathan,
+    // 2026-07-21: "the speech bubble follows him around even though the
+    // dialogue is the occupant of the tree").
+    const anchor = isTree && dialogueAnchor ? dialogueAnchor : { x: player.x + player.w / 2, y: player.y };
+    drawBubble(anchor.x, anchor.y - 24, dialogueMessage, 320, alpha, 0, fillColor);
   }
 
   function drawHeart(hh) {
@@ -4760,27 +4864,52 @@
 
   // Mystical assembly station on the final level: a stone pedestal where the
   // three artifacts orbit, merge, and fuse into one glowing whole.
+  // Bottom-middle cell (index 4) of ruins-sprites.png — the one with the
+  // purple gem set into it — reused as the assembly pedestal itself
+  // (Jonathan, 2026-07-21) instead of the old flat procedural trapezoid,
+  // which had no art behind it at all and looked out of place next to the
+  // rest of the painted scene.
+  const STATION_PEDESTAL_VARIANT = 4;
   function drawStation() {
     const sx = station.x;
     const sy = station.y;
     ctx.save();
-    // pedestal
-    ctx.fillStyle = "#5c6a82";
-    ctx.strokeStyle = "#203252";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(sx - 34, sy);
-    ctx.lineTo(sx - 22, sy - 52);
-    ctx.lineTo(sx + 22, sy - 52);
-    ctx.lineTo(sx + 34, sy);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "#7b89a3";
-    ctx.fillRect(sx - 28, sy - 58, 56, 8);
-    ctx.strokeRect(sx - 28, sy - 58, 56, 8);
+    const PEDESTAL_H = 128;
+    const PEDESTAL_MAX_W = 100;
+    let pedestalTopY = sy - PEDESTAL_H * 0.7; // fallback estimate, overwritten below when the art's loaded
+    if (ruinSpritesImg.complete && ruinSpritesImg.naturalWidth) {
+      drawSpriteCell(
+        ruinSpritesImg,
+        RUIN_SPRITE_GRID,
+        STATION_PEDESTAL_VARIANT,
+        sx,
+        sy,
+        PEDESTAL_H,
+        PEDESTAL_MAX_W,
+        RUIN_CONTENT_BOXES
+      );
+      pedestalTopY = sy - PEDESTAL_H;
+    } else {
+      // Art not loaded yet — same placeholder trapezoid as before, so
+      // there's still something to stand on during the loading window.
+      ctx.fillStyle = "#5c6a82";
+      ctx.strokeStyle = "#203252";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(sx - 34, sy);
+      ctx.lineTo(sx - 22, sy - 52);
+      ctx.lineTo(sx + 22, sy - 52);
+      ctx.lineTo(sx + 34, sy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "#7b89a3";
+      ctx.fillRect(sx - 28, sy - 58, 56, 8);
+      ctx.strokeRect(sx - 28, sy - 58, 56, 8);
+      pedestalTopY = sy - 58;
+    }
 
-    const cy = sy - 96;
+    const cy = pedestalTopY - 40;
     const assembling = stationTimer >= 0 && !artifactsAssembled;
     const progress = assembling ? Math.min(1, stationTimer / ASSEMBLE_DURATION) : 0;
     if (artifactsAssembled) {
@@ -5169,6 +5298,14 @@
   }
 
   function draw() {
+    // The canvas is never cleared otherwise — every frame just paints over
+    // the last one. Normally invisible because the full-canvas parallax
+    // background repaints over everything each frame, but drawParallaxLayers
+    // skips any layer whose image isn't loaded yet, so on a slow/cellular
+    // connection (art still fetching) stale pixels from previous frames
+    // were left behind, smearing into a trail behind moving objects until
+    // every background layer finished loading.
+    ctx.clearRect(0, 0, W, H);
     drawParallaxLayers();
     if (state === "finale") {
       drawFinaleScene();

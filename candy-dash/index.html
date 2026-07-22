@@ -17,13 +17,20 @@
   <meta name="twitter:image" content="https://trollandunicorn.com/Games/candydash/assets/splash_full.png" />
   <!-- ?v= is a cache-buster: bump it whenever this file or the css/js change
        so phones pick up the new version without a manual cache clear. -->
-  <link rel="stylesheet" href="style.css?v=18" />
+  <link rel="stylesheet" href="style.css?v=19" />
 </head>
 <body>
   <div id="game-wrap">
     <canvas id="game" width="960" height="600"></canvas>
 
-    <div id="overlay" class="screen">
+    <div id="loading-screen" class="screen">
+      <img class="logo" src="assets/logo.png?v=2" alt="Troll & Unicorn" />
+      <h1>Candy Dash</h1>
+      <p class="loading-label" id="loading-label">Loading art&hellip;</p>
+      <div id="loading-bar-track"><div id="loading-bar-fill"></div></div>
+    </div>
+
+    <div id="overlay" class="screen hidden">
       <img class="logo" src="assets/logo.png?v=2" alt="Troll & Unicorn" />
       <h1>Candy Dash</h1>
       <div class="portrait-row">
@@ -155,6 +162,6 @@
     </div>
   </div>
 
-  <script src="game.js?v=51"></script>
+  <script src="game.js?v=55"></script>
 </body>
 </html>
